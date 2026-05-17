@@ -16,7 +16,8 @@ type Metrics interface {
 	SetRegisteredKeys(n int)
 }
 
-// realMetrics emits Prometheus metrics.
+// realMetrics emits Prometheus metrics using a dedicated registry
+// to avoid duplicate registration panics across multiple SDK instances.
 type realMetrics struct {
 	watchEvents    *prometheus.CounterVec
 	watchErrors    *prometheus.CounterVec
@@ -25,6 +26,7 @@ type realMetrics struct {
 }
 
 func newRealMetrics() *realMetrics {
+	reg := prometheus.NewRegistry()
 	m := &realMetrics{
 		watchEvents: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "poya",
@@ -51,7 +53,7 @@ func newRealMetrics() *realMetrics {
 			Help:      "Number of registered config keys currently being watched",
 		}),
 	}
-	prometheus.MustRegister(m.watchEvents, m.watchErrors, m.updateLatency, m.registeredKeys)
+	reg.MustRegister(m.watchEvents, m.watchErrors, m.updateLatency, m.registeredKeys)
 	return m
 }
 

@@ -1,10 +1,268 @@
 # poya
 
 [![CI](https://github.com/PapaDanielVi/poya/actions/workflows/ci.yml/badge.svg)](https://github.com/PapaDanielVi/poya/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/PapaDanielVi/poya/branch/main/graph/badge.svg)](https://codecov.io/gh/PapaDanielVi/poya)
 [![Go Report Card](https://goreportcard.com/badge/github.com/PapaDanielVi/poya)](https://goreportcard.com/report/github.com/PapaDanielVi/poya)
 [![Go Reference](https://pkg.go.dev/badge/github.com/PapaDanielVi/poya.svg)](https://pkg.go.dev/github.com/PapaDanielVi/poya)
-[![GitHub release](https://img.shields.io/github/v/release/PapaDanielVi/poya)](https://github.com/PapaDanielVi/poya/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A dynamic config sdk for your golang application runtime.
+**poya** is a Go SDK for dynamic runtime configuration. Register typed config values, connect a backend provider (etcd, Redis, or HashiCorp Vault), and the SDK keeps everything in sync in the background. Your application only calls `Get()` — no polling, no refresh logic.
+
+## Features
+
+- **Type-safe generics** — `DcValue[string]`, `DcValue[int]`, `DcStruct[YourConfig]`, any type you need
+- **Custom struct support** — register complex structs as config values; the SDK JSON-decodes provider data into them automatically
+- **Declarative config structs** — define your entire config layout in a single struct with tags; poya discovers and registers all fields via reflection
+- **Multiple providers** — etcd (watch API), Redis (polling), HashiCorp Vault (KV v2 polling)
+- **Lock-free reads** — `Get()` uses `atomic.Value` for zero-contention reads on the hot path
+- **Prometheus metrics** — optional built-in metrics for watch events, errors, update latency, and registered key count
+- **Prefix & nesting** — hierarchical key management with automatic prefix accumulation for nested structs
+- **Graceful shutdown** — context-based cancellation cleans up all background goroutines
+
+## Installation
+
+```bash
+go get github.com/PapaDanielVi/poya
+```
+
+Requires Go 1.26+.
+
+## Quick Start
+
+```go
+package main
+
+import (
+	"fmt"
+	"log"
+
+	"github.com/PapaDanielVi/poya"
+	"github.com/PapaDanielVi/poya/provider/redis"
+)
+
+func main() {
+	// 1. Create a provider
+	rdb := redis.New(redis.Config{
+		Addr:         "localhost:6379",
+		PollInterval: 5 * time.Second,
+	})
+
+	// 2. Create the SDK
+	sdk := poya.New(poya.Config{
+		Provider:      rdb,
+		Prefix:        "myapp/",
+		EnableMetrics: true,
+	})
+
+	// 3. Register values individually
+	timeout := poya.NewDcValue(30 * time.Second)
+	poya.Register(sdk, "timeout", timeout)
+
+	// 4. Start background sync
+	sdk.Start()
+	defer sdk.Stop()
+
+	// 5. Read values anywhere in your application
+	fmt.Println(timeout.Get()) // always the latest value from Redis
+}
+```
+
+## API Reference
+
+### Scalar Values — `DcValue[T]`
+
+For primitive and simple types (`string`, `int`, `bool`, `float64`, `time.Duration`, etc.):
+
+```go
+val := poya.NewDcValue("default_value")
+poya.Register(sdk, "my_key", val)
+
+// Anywhere in your app:
+current := val.Get() // returns string
+```
+
+### Struct Values — `DcStruct[T]`
+
+For complex configuration objects. The provider stores a JSON blob; poya decodes it into your struct:
+
+```go
+type DatabaseConfig struct {
+	Host    string `json:"host"`
+	Port    int    `json:"port"`
+	MaxConn int    `json:"max_conn"`
+}
+
+dbDefault := DatabaseConfig{Host: "localhost", Port: 5432, MaxConn: 10}
+dbVal := poya.NewDcStruct(dbDefault)
+poya.RegisterStruct(sdk, "database", dbVal)
+
+// Anywhere in your app:
+cfg := dbVal.Get() // returns DatabaseConfig
+fmt.Println(cfg.Host)
+```
+
+### Declarative Config Structs — `RegisterConfig`
+
+Define your entire configuration in a single struct. poya uses struct tags to discover fields:
+
+```go
+type AppConfig struct {
+	// Scalar values: use `key=` to specify the provider key
+	Timeout  poya.DcValue[time.Duration] `poya:"key=timeout"`
+	Verbose  poya.DcValue[bool]          `poya:"key=verbose"`
+
+	// Struct values: also use `key=`
+	DBConfig poya.DcStruct[DatabaseConfig] `poya:"key=db_config"`
+
+	// Nested structs: use `prefix=` to build hierarchical keys
+	DB       DBConfig `poya:"prefix=db"`
+}
+
+type DBConfig struct {
+	Host poya.DcValue[string] `poya:"key=host"`
+	Port poya.DcValue[int]    `poya:"key=port"`
+}
+
+cfg := AppConfig{
+	Timeout:  *poya.NewDcValue(30 * time.Second),
+	Verbose:  *poya.NewDcValue(false),
+	DBConfig: *poya.NewDcStruct(DatabaseConfig{Host: "localhost", Port: 5432}),
+	DB: DBConfig{
+		Host: *poya.NewDcValue("localhost"),
+		Port: *poya.NewDcValue(5432),
+	},
+}
+
+sdk.RegisterConfig(&cfg)
+// Registers: myapp/timeout, myapp/verbose, myapp/db_config, myapp/db/host, myapp/db/port
+```
+
+#### Tag Format
+
+| Tag | Meaning |
+|-----|---------|
+| `poya:"key=timeout"` | This field is a config value watched at key `timeout` |
+| `poya:"prefix=db"` | This nested struct contributes `db/` to child key paths |
+| `poya:"key=host,prefix=db"` | Both a value and a prefix for deeper nesting |
+
+Fields without a tag use their lowercased field name as the key.
+
+### Prefix Handling
+
+Prefixes accumulate hierarchically:
+
+```
+Full key = SDK Prefix + Parent Prefixes + Field Key
+
+Example with Prefix="myapp/":
+  Timeout field (key=timeout) → "myapp/timeout"
+  DB.Host field (key=host, parent prefix="db/") → "myapp/db/host"
+```
+
+### Metrics
+
+Enable Prometheus metrics with `EnableMetrics: true`:
+
+```go
+sdk := poya.New(poya.Config{
+	Provider:      rdb,
+	Prefix:        "myapp/",
+	EnableMetrics: true,
+})
+```
+
+When enabled, poya collects:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `poya_watch_events_total` | Counter | Total watch events received (labeled by key) |
+| `poya_watch_errors_total` | Counter | Total watch errors (labeled by key) |
+| `poya_sync_update_latency_seconds` | Histogram | Value update latency (labeled by key) |
+| `poya_registered_keys` | Gauge | Number of registered config keys |
+
+Each SDK instance uses its own Prometheus registry, so multiple instances won't conflict. When metrics are disabled, a no-op stub is used — no if-checks in hot paths.
+
+## Provider Setup
+
+### etcd
+
+Uses etcd's native Watch API for event-driven updates (no polling):
+
+```go
+etcdProvider, err := etcd.New(etcd.Config{
+	Endpoints:   []string{"localhost:2379"},
+	DialTimeout: 5 * time.Second,
+})
+if err != nil {
+	log.Fatal(err)
+}
+defer etcdProvider.Close()
+
+sdk := poya.New(poya.Config{Provider: etcdProvider, Prefix: "myapp/"})
+```
+
+### Redis
+
+Polls at a configurable interval. Best for simple setups without etcd:
+
+```go
+rdb := redis.New(redis.Config{
+	Addr:         "localhost:6379",
+	Password:     "",       // no auth
+	DB:           0,
+	PollInterval: 5 * time.Second,
+})
+defer rdb.Close()
+
+sdk := poya.New(poya.Config{Provider: rdb, Prefix: "myapp/"})
+```
+
+### HashiCorp Vault
+
+Polls the KV v2 secrets engine. The key is the secret path within the mount:
+
+```go
+v, err := vault.New(vault.Config{
+	Address:      "http://localhost:8200",
+	Token:        "root-token",
+	MountPath:    "secret",
+	PollInterval: 10 * time.Second,
+})
+if err != nil {
+	log.Fatal(err)
+}
+
+sdk := poya.New(poya.Config{Provider: v, Prefix: "myapp/"})
+```
+
+## Use Cases
+
+- **Feature flags** — toggle features at runtime without redeployment
+- **Database credentials** — rotate connection strings dynamically
+- **Service discovery** — update endpoint lists as services scale
+- **Rate limits & thresholds** — adjust operational parameters in real time
+- **A/B testing** — change experiment parameters on the fly
+- **Multi-tenant config** — per-tenant settings with hierarchical key prefixes
+
+## Project Structure
+
+```
+poya/
+├── poya.go              # SDK: New, Start, Stop, Register, RegisterConfig
+├── dcvalue.go           # DcValue[T] — scalar config value
+├── dcstruct.go          # DcStruct[T] — struct config value (JSON-decoded)
+├── metrics.go           # Metrics interface, Prometheus impl, no-op stub
+├── provider/
+│   ├── provider.go      # Provider interface
+│   ├── etcd/            # etcd provider (native Watch API)
+│   ├── redis/           # Redis provider (polling)
+│   └── vault/           # HashiCorp Vault provider (KV v2 polling)
+└── ...
+```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on adding providers, value types, and submitting pull requests.
+
+## License
+
+[MIT](LICENSE)

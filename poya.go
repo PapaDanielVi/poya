@@ -330,11 +330,14 @@ func updateScalarEntry(e *entry, raw string) {
 }
 
 func updateStructEntry(e *entry, raw string) {
-	val := e.defaultVal
-	if err := json.Unmarshal([]byte(raw), &val); err != nil {
+	// Create a new instance of the same type as the default value,
+	// unmarshal into it, then store. This preserves the concrete type
+	// so atomic.Value doesn't panic from type mismatch.
+	rv := reflect.New(reflect.TypeOf(e.defaultVal))
+	if err := json.Unmarshal([]byte(raw), rv.Interface()); err != nil {
 		return
 	}
-	e.atomic.Store(val)
+	e.atomic.Store(rv.Elem().Interface())
 }
 
 // parseValue converts a raw string to the type of the default value.
