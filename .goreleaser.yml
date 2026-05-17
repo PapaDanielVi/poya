@@ -1,0 +1,35 @@
+version: 2
+
+project_name: poya
+
+before:
+  hooks:
+    - go mod tidy
+    - go test -race ./...
+
+builds:
+  - skip: true
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: PapaDanielVi
+    name: poya
+  draft: false
+  prerelease: auto
+  mode: replace
+  header: |
+    ## {{ .Tag }} ({{ .Date }})
+
+    See [CHANGELOG.md](./CHANGELOG.md) for details.
+  footer: |
+    **Full Changelog**: https://github.com/PapaDanielVi/poya/compare/{{ .PreviousTag }}...{{ .Tag }}
