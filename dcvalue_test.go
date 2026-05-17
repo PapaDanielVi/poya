@@ -27,7 +27,7 @@ func TestDcValueInternalSet(t *testing.T) {
 	}
 }
 
-func TestDcValueInternalKey(t *testing.T) {
+func TestDcValueInternalKey(_ *testing.T) {
 	d := NewDcValue("val")
 	d.InternalKey("mykey")
 }
@@ -39,7 +39,7 @@ func TestDcValueInternalDefault(t *testing.T) {
 	}
 }
 
-func TestDcValueConcurrentGetSet(t *testing.T) {
+func TestDcValueConcurrentGetSet(_ *testing.T) {
 	d := NewDcValue(0)
 	var wg sync.WaitGroup
 

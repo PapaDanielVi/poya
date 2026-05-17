@@ -1,3 +1,4 @@
+// Package provider defines the Provider interface for configuration backends.
 package provider
 
 import "context"

@@ -1,0 +1,108 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - bodyclose
+    - nilerr
+    - sqlclosecheck
+    - gocritic
+    - revive
+    - misspell
+    - unconvert
+    - prealloc
+    - unparam
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: false
+
+  govet:
+    enable-all: false
+    enable:
+      - assign
+      - atomic
+      - bools
+      - buildtag
+      - copylocks
+      - errorsas
+      - httpresponse
+      - ifaceassert
+      - loopclosure
+      - lostcancel
+      - nilfunc
+      - printf
+      - shift
+      - stdmethods
+      - stringintconv
+      - structtag
+      - tests
+      - unmarshal
+      - unreachable
+      - unsafeptr
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+    disabled-checks:
+      - hugeParam
+      - rangeValCopy
+
+  revive:
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: dot-imports
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: increment-decrement
+      - name: var-declaration
+      - name: range
+      - name: receiver-naming
+      - name: indent-error-flow
+      - name: empty-block
+      - name: superfluous-else
+      - name: unreachable-code
+
+  misspell:
+    locale: US
+
+  staticcheck:
+    checks:
+      - all
+      - -SA1019
+      - -SA9003
+
+  unparam:
+    check-exported: false
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+        - unparam
+        - gocritic
+    - path: mocks/
+      linters:
+        - unused
+        - errcheck
+        - unparam
+        - revive
+    - linters:
+        - gocritic
+      text: "singleCaseSwitch|assignOp|appendAssign"
+    - linters:
+        - revive
+      text: "var-naming.*Id"

@@ -11,9 +11,9 @@ import (
 
 // mockProvider is a test double for provider.Provider.
 type mockProvider struct {
-	mu       sync.Mutex
-	values   map[string]string
-	watchFn  func(ctx context.Context, key string, onChange func(key string, value string)) error
+	mu      sync.Mutex
+	values  map[string]string
+	watchFn func(ctx context.Context, key string, onChange func(key string, value string)) error
 }
 
 func newMockProvider() *mockProvider {
@@ -22,7 +22,7 @@ func newMockProvider() *mockProvider {
 	}
 }
 
-func (m *mockProvider) Get(ctx context.Context, key string) (string, error) {
+func (m *mockProvider) Get(_ context.Context, key string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.values[key], nil
@@ -32,7 +32,6 @@ func (m *mockProvider) Watch(ctx context.Context, key string, onChange func(key 
 	if m.watchFn != nil {
 		return m.watchFn(ctx, key, onChange)
 	}
-	// Default: send initial value then block until context cancelled
 	m.mu.Lock()
 	val := m.values[key]
 	m.mu.Unlock()
@@ -61,6 +60,25 @@ func TestNewSDK(t *testing.T) {
 	}
 }
 
+func TestNewSDKWithMetrics(t *testing.T) {
+	p := newMockProvider()
+	sdk := New(Config{Provider: p, Prefix: "test/", EnableMetrics: true})
+	if sdk == nil {
+		t.Fatal("New() returned nil")
+	}
+	if _, ok := sdk.metrics.(*realMetrics); !ok {
+		t.Error("expected realMetrics when EnableMetrics is true")
+	}
+}
+
+func TestNewSDKWithoutMetrics(t *testing.T) {
+	p := newMockProvider()
+	sdk := New(Config{Provider: p})
+	if _, ok := sdk.metrics.(noopMetrics); !ok {
+		t.Error("expected noopMetrics when EnableMetrics is false")
+	}
+}
+
 func TestRegisterAndGet(t *testing.T) {
 	p := newMockProvider()
 	p.set("test/mykey", "hello")
@@ -74,11 +92,11 @@ func TestRegisterAndGet(t *testing.T) {
 	}
 }
 
-func TestRegisterStruct(t *testing.T) {
+func TestRegisterConfigScalar(t *testing.T) {
 	type AppConfig struct {
-		DBHost  DcValue[string] `poya:"db_host"`
-		DBPort  DcValue[int]    `poya:"db_port"`
-		Verbose DcValue[bool]   `poya:"verbose"`
+		DBHost  DcValue[string] `poya:"key=db_host"`
+		DBPort  DcValue[int]    `poya:"key=db_port"`
+		Verbose DcValue[bool]   `poya:"key=verbose"`
 	}
 
 	p := newMockProvider()
@@ -90,7 +108,7 @@ func TestRegisterStruct(t *testing.T) {
 		Verbose: *NewDcValue(false),
 	}
 
-	RegisterStruct(sdk, &cfg)
+	RegisterConfig(sdk, &cfg)
 
 	sdk.mu.RLock()
 	defer sdk.mu.RUnlock()
@@ -106,13 +124,13 @@ func TestRegisterStruct(t *testing.T) {
 	}
 }
 
-func TestRegisterStructNested(t *testing.T) {
+func TestRegisterConfigNested(t *testing.T) {
 	type DBConfig struct {
-		Host DcValue[string] `poya:"host"`
-		Port DcValue[int]    `poya:"port"`
+		Host DcValue[string] `poya:"key=host"`
+		Port DcValue[int]    `poya:"key=port"`
 	}
 	type AppConfig struct {
-		DB DBConfig `poya:"db"`
+		DB DBConfig `poya:"prefix=db"`
 	}
 
 	p := newMockProvider()
@@ -125,7 +143,7 @@ func TestRegisterStructNested(t *testing.T) {
 		},
 	}
 
-	RegisterStruct(sdk, &cfg)
+	RegisterConfig(sdk, &cfg)
 
 	sdk.mu.RLock()
 	defer sdk.mu.RUnlock()
@@ -138,7 +156,7 @@ func TestRegisterStructNested(t *testing.T) {
 	}
 }
 
-func TestRegisterStructNoTag(t *testing.T) {
+func TestRegisterConfigNoTag(t *testing.T) {
 	type AppConfig struct {
 		MyKey DcValue[string]
 	}
@@ -150,7 +168,7 @@ func TestRegisterStructNoTag(t *testing.T) {
 		MyKey: *NewDcValue("default"),
 	}
 
-	RegisterStruct(sdk, &cfg)
+	RegisterConfig(sdk, &cfg)
 
 	sdk.mu.RLock()
 	defer sdk.mu.RUnlock()
@@ -160,7 +178,71 @@ func TestRegisterStructNoTag(t *testing.T) {
 	}
 }
 
-func TestStartUpdatesValue(t *testing.T) {
+func TestRegisterConfigDcStruct(t *testing.T) {
+	type DBConfig struct {
+		Host string `json:"host"`
+		Port int    `json:"port"`
+	}
+
+	p := newMockProvider()
+	sdk := New(Config{Provider: p, Prefix: "myapp/"})
+
+	val := NewDcStruct(DBConfig{Host: "localhost", Port: 5432})
+	RegisterStruct(sdk, "db", val)
+
+	sdk.mu.RLock()
+	defer sdk.mu.RUnlock()
+
+	e, ok := sdk.values["myapp/db"]
+	if !ok {
+		t.Fatal("db struct not registered")
+	}
+	if e.kind != entryKindStruct {
+		t.Error("expected entryKindStruct for DcStruct registration")
+	}
+}
+
+func TestRegisterConfigMixed(t *testing.T) {
+	type DBDetails struct {
+		Host string `json:"host"`
+		Port int    `json:"port"`
+	}
+	type AppConfig struct {
+		Timeout DcValue[time.Duration] `poya:"key=timeout"`
+		DB      DcStruct[DBDetails]    `poya:"key=db_config"`
+	}
+
+	p := newMockProvider()
+	sdk := New(Config{Provider: p, Prefix: "myapp/"})
+
+	cfg := AppConfig{
+		Timeout: *NewDcValue(5 * time.Second),
+		DB:      *NewDcStruct(DBDetails{Host: "localhost", Port: 5432}),
+	}
+
+	RegisterConfig(sdk, &cfg)
+
+	sdk.mu.RLock()
+	defer sdk.mu.RUnlock()
+
+	timeoutEntry, ok := sdk.values["myapp/timeout"]
+	if !ok {
+		t.Fatal("timeout not registered")
+	}
+	if timeoutEntry.kind != entryKindScalar {
+		t.Error("expected entryKindScalar for DcValue")
+	}
+
+	dbEntry, ok := sdk.values["myapp/db_config"]
+	if !ok {
+		t.Fatal("db_config not registered")
+	}
+	if dbEntry.kind != entryKindStruct {
+		t.Error("expected entryKindStruct for DcStruct")
+	}
+}
+
+func TestStartUpdatesScalarValue(t *testing.T) {
 	p := newMockProvider()
 	p.set("test/key", "initial")
 
@@ -168,7 +250,6 @@ func TestStartUpdatesValue(t *testing.T) {
 	p.watchFn = func(ctx context.Context, key string, onChange func(key string, value string)) error {
 		if key == "test/key" {
 			onChange(key, "initial")
-			// Simulate an update after a short delay
 			go func() {
 				time.Sleep(50 * time.Millisecond)
 				onChange(key, "updated")
@@ -191,11 +272,54 @@ func TestStartUpdatesValue(t *testing.T) {
 		t.Fatal("timed out waiting for update signal")
 	}
 
-	// Give the goroutine a moment to process the callback
 	time.Sleep(10 * time.Millisecond)
 
 	if got := val.Get(); got != "updated" {
 		t.Errorf("Get() = %v, want %v", got, "updated")
+	}
+
+	sdk.Stop()
+}
+
+func TestStartUpdatesStructValue(t *testing.T) {
+	type DBConfig struct {
+		Host string `json:"host"`
+		Port int    `json:"port"`
+	}
+
+	p := newMockProvider()
+
+	updateCh := make(chan struct{}, 1)
+	p.watchFn = func(ctx context.Context, key string, onChange func(key string, value string)) error {
+		if key == "test/db" {
+			onChange(key, `{"host":"localhost","port":5432}`)
+			go func() {
+				time.Sleep(50 * time.Millisecond)
+				onChange(key, `{"host":"remote","port":3306}`)
+				updateCh <- struct{}{}
+			}()
+		}
+		<-ctx.Done()
+		return nil
+	}
+
+	sdk := New(Config{Provider: p, Prefix: "test/"})
+	val := NewDcStruct(DBConfig{})
+	RegisterStruct(sdk, "db", val)
+
+	sdk.Start()
+
+	select {
+	case <-updateCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for update signal")
+	}
+
+	time.Sleep(10 * time.Millisecond)
+
+	got := val.Get()
+	if got.Host != "remote" || got.Port != 3306 {
+		t.Errorf("Get() = %+v, want {remote 3306}", got)
 	}
 
 	sdk.Stop()
@@ -227,6 +351,27 @@ func TestParseValue(t *testing.T) {
 	}
 }
 
+func TestParsePoyaTag(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want poyaTag
+	}{
+		{"", poyaTag{}},
+		{"key=db_host", poyaTag{key: "db_host"}},
+		{"prefix=db", poyaTag{prefix: "db"}},
+		{"key=db_host,prefix=db", poyaTag{key: "db_host", prefix: "db"}},
+		{"prefix=db,key=db_host", poyaTag{key: "db_host", prefix: "db"}},
+	}
+
+	for _, tt := range tests {
+		got := parsePoyaTag(tt.raw)
+		if got.key != tt.want.key || got.prefix != tt.want.prefix {
+			t.Errorf("parsePoyaTag(%q) = {key:%q prefix:%q}, want {key:%q prefix:%q}",
+				tt.raw, got.key, got.prefix, tt.want.key, tt.want.prefix)
+		}
+	}
+}
+
 func TestSDKWithNoPrefix(t *testing.T) {
 	p := newMockProvider()
 	sdk := New(Config{Provider: p})
@@ -246,7 +391,7 @@ func TestSDKStopCancelsWatchers(t *testing.T) {
 	p := newMockProvider()
 	watchStopped := make(chan struct{}, 1)
 
-	p.watchFn = func(ctx context.Context, key string, onChange func(key string, value string)) error {
+	p.watchFn = func(ctx context.Context, _ string, _ func(_ string, _ string)) error {
 		<-ctx.Done()
 		watchStopped <- struct{}{}
 		return nil
@@ -261,10 +406,17 @@ func TestSDKStopCancelsWatchers(t *testing.T) {
 
 	select {
 	case <-watchStopped:
-		// watcher was cancelled as expected
 	case <-time.After(2 * time.Second):
 		t.Fatal("watcher was not cancelled after Stop()")
 	}
+}
+
+func TestNoopMetrics(_ *testing.T) {
+	m := noopMetrics{}
+	m.IncWatchEvents("key")
+	m.IncWatchErrors("key")
+	m.ObserveUpdateLatency("key", time.Second)
+	m.SetRegisteredKeys(5)
 }
 
 // Ensure mockProvider implements provider.Provider
