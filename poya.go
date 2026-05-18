@@ -175,18 +175,29 @@ func isDcValue(v reflect.Value) bool {
 	if !v.CanAddr() {
 		return false
 	}
-	addr := reflect.ValueOf(v.Addr().Interface())
-	return addr.MethodByName("Get").IsValid() &&
-		addr.MethodByName("InternalKey").IsValid() &&
-		addr.MethodByName("InternalSet").IsValid()
+	// For *DcValue[T] pointer fields, methods are on the pointer itself.
+	// For embedded DcValue[T] value fields, methods are on the address.
+	rcv := reflect.ValueOf(v.Addr().Interface())
+	if v.Kind() == reflect.Pointer {
+		rcv = v
+	}
+	return rcv.MethodByName("Get").IsValid() &&
+		rcv.MethodByName("InternalKey").IsValid() &&
+		rcv.MethodByName("InternalSet").IsValid()
 }
 
 func handleDcValue(s *SDK, fv reflect.Value, fullKey string) {
-	addr := fv.Addr()
-	setKey := reflect.ValueOf(addr.Interface()).MethodByName("InternalKey")
-	getDef := reflect.ValueOf(addr.Interface()).MethodByName("InternalDefault")
-	getAtomic := reflect.ValueOf(addr.Interface()).MethodByName("InternalAtomic")
-	getKind := reflect.ValueOf(addr.Interface()).MethodByName("InternalKind")
+	// For *DcValue[T] pointer fields, use the pointer directly.
+	// For embedded DcValue[T] value fields, use the address.
+	rcv := fv
+	if fv.Kind() != reflect.Pointer {
+		rcv = reflect.ValueOf(fv.Addr().Interface())
+	}
+
+	setKey := rcv.MethodByName("InternalKey")
+	getDef := rcv.MethodByName("InternalDefault")
+	getAtomic := rcv.MethodByName("InternalAtomic")
+	getKind := rcv.MethodByName("InternalKind")
 
 	setKey.Call([]reflect.Value{reflect.ValueOf(fullKey)})
 	defVal := getDef.Call(nil)[0].Interface()

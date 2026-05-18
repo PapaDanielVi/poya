@@ -1,7 +1,7 @@
 # poya
 
 [![CI](https://github.com/PapaDanielVi/poya/actions/workflows/ci.yml/badge.svg)](https://github.com/PapaDanielVi/poya/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/PapaDanielVi/poya)](https://goreportcard.com/report/github.com/PapaDanielVi/poya)
+[![Go Report Card](https://goreportcard.com/badge/github.com/PapaDanielVi/poya)](https://goreportcard.com/badge/github.com/PapaDanielVi/poya)
 [![Go Reference](https://pkg.go.dev/badge/github.com/PapaDanielVi/poya.svg)](https://pkg.go.dev/github.com/PapaDanielVi/poya)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -23,12 +23,12 @@
 
 `DcValue[T]` supports these scalar types for automatic string parsing:
 
-| Category | Types |
-|----------|-------|
-| Signed integers | `int`, `int8`, `int16`, `int32`, `int64` |
+| Category          | Types                                         |
+| ----------------- | --------------------------------------------- |
+| Signed integers   | `int`, `int8`, `int16`, `int32`, `int64`      |
 | Unsigned integers | `uint`, `uint8`, `uint16`, `uint32`, `uint64` |
-| Floating point | `float32`, `float64` |
-| Other | `string`, `bool`, `time.Duration`, `[]byte` |
+| Floating point    | `float32`, `float64`                          |
+| Other             | `string`, `bool`, `time.Duration`, `[]byte`   |
 
 Any other type falls through to raw string return.
 
@@ -146,11 +146,11 @@ sdk.RegisterConfig(&cfg)
 
 #### Tag Format
 
-| Tag | Meaning |
-|-----|---------|
-| `poya:"key=timeout"` | This field is a config value watched at key `timeout` |
-| `poya:"prefix=db"` | This nested struct contributes `db/` to child key paths |
-| `poya:"key=host,prefix=db"` | Both a value and a prefix for deeper nesting |
+| Tag                         | Meaning                                                 |
+| --------------------------- | ------------------------------------------------------- |
+| `poya:"key=timeout"`        | This field is a config value watched at key `timeout`   |
+| `poya:"prefix=db"`          | This nested struct contributes `db/` to child key paths |
+| `poya:"key=host,prefix=db"` | Both a value and a prefix for deeper nesting            |
 
 Fields without a tag use their lowercased field name as the key.
 
@@ -215,12 +215,12 @@ When metrics are disabled, a no-op stub is used — no if-checks in hot paths.
 
 **Prometheus metrics:**
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `poya_watch_events_total` | Counter | Total watch events received (labeled by key) |
-| `poya_watch_errors_total` | Counter | Total watch errors (labeled by key) |
-| `poya_sync_update_latency_seconds` | Histogram | Value update latency (labeled by key) |
-| `poya_registered_keys` | Gauge | Number of registered config keys |
+| Metric                             | Type      | Description                                  |
+| ---------------------------------- | --------- | -------------------------------------------- |
+| `poya_watch_events_total`          | Counter   | Total watch events received (labeled by key) |
+| `poya_watch_errors_total`          | Counter   | Total watch errors (labeled by key)          |
+| `poya_sync_update_latency_seconds` | Histogram | Value update latency (labeled by key)        |
+| `poya_registered_keys`             | Gauge     | Number of registered config keys             |
 
 Each SDK instance uses its own Prometheus registry, so multiple instances won't conflict.
 

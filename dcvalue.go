@@ -82,3 +82,15 @@ func (d *DcValue[T]) InternalAtomic() *atomic.Value {
 func (d *DcValue[T]) InternalKind() entryKind {
 	return d.kind
 }
+
+// SetDefaultAndValue sets the default value, current value, and kind
+// based on the type of val. The val must be assignable to T. This method
+// is intended for use by decode hooks and similar reflection-based
+// initialization code.
+func (d *DcValue[T]) SetDefaultAndValue(val T) {
+	d.defaultValue = val
+	d.val.Store(val)
+	if reflect.TypeOf(val).Kind() == reflect.Struct {
+		d.kind = entryKindStruct
+	}
+}
