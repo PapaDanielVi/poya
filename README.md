@@ -1,7 +1,7 @@
 # poya
 
 [![CI](https://github.com/PapaDanielVi/poya/actions/workflows/ci.yml/badge.svg)](https://github.com/PapaDanielVi/poya/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/PapaDanielVi/poya)](https://goreportcard.com/badge/github.com/PapaDanielVi/poya)
+[![Go Report Card](https://goreportcard.com/report/github.com/PapaDanielVi/poya)](https://goreportcard.com/report/github.com/PapaDanielVi/poya)
 [![Go Reference](https://pkg.go.dev/badge/github.com/PapaDanielVi/poya.svg)](https://pkg.go.dev/github.com/PapaDanielVi/poya)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
