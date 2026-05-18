@@ -2,23 +2,23 @@
 
 ## Project Purpose
 
-Poya is a dynamic config SDK for Go. Developers register typed config values (`DcValue[T]`, `DcStruct[T]`), choose a provider (etcd, Redis, Vault), and the SDK keeps values in sync in the background. Developers only call `Get()`.
+Poya is a dynamic config SDK for Go. Developers register typed config values (`DcValue[T]`), choose a provider (etcd, Redis, Vault, MySQL, PostgreSQL), and the SDK keeps values in sync in the background. Developers only call `Get()`.
 
 ## Architecture
 
 ```
-DcValue[T]  → scalar values (string, int, bool, etc.), parsed via type switch
-DcStruct[T] → complex structs, JSON-decoded from provider
+DcValue[T]  → unified type: scalars parsed via type switch, structs JSON-decoded
 entry       → internal type-erased wrapper holding atomic.Value + entryKind
-Metrics     → interface with realMetrics (Prometheus) and noopMetrics (stub)
-Provider    → interface with etcd (watch), Redis (poll), Vault (poll)
+Metrics     → interface with Prometheus/otel/expvar backends and NoopMetrics stub
+Logger      → interface with Debug/Info/Warn/Error (slog-based default, noop stub)
+Provider    → interface with etcd (watch), Redis/Vault/MySQL/PostgreSQL (poll)
 ```
 
 Key types:
-- `DcValue[T]` in `dcvalue.go` — only `Get()` is public; `InternalKey`, `InternalSet`, `InternalDefault`, `InternalAtomic` are SDK-internal
-- `DcStruct[T]` in `dcstruct.go` — same pattern but uses `InternalSetJSON` instead of `InternalSet`
+- `DcValue[T]` in `dcvalue.go` — single generic type for both scalars and structs. Uses `reflect.TypeOf` at construction to determine kind. Has `InternalKind()`, `InternalSetJSON()` for struct handling.
 - `entry` in `poya.go` — has `kind entryKind` (`entryKindScalar` or `entryKindStruct`) determining how raw provider values are decoded
-- `Metrics` interface in `metrics.go` — `realMetrics` uses a per-instance Prometheus registry (not global) to avoid duplicate registration panes
+- `Metrics` interface in `metrics/metrics.go` — implementations in `metrics/prometheus/`, `metrics/otel/`, `metrics/expvar/`
+- `Logger` interface in `logger/logger.go` — structured logging with slog-based default and noop stub
 
 ## 1. Think Before Coding
 
@@ -40,7 +40,7 @@ Before implementing:
 - No error handling for impossible scenarios.
 - If you write 200 lines and it could be 50, rewrite it.
 
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+Ask yourself: "Would a senior engineer say this be overcomplicated?" If yes, simplify.
 
 ## 3. Surgical Changes
 
@@ -79,13 +79,30 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ## Lessons Learned (Go + Generics)
 
 ### Generics + Reflection
-- **Unexported methods on generic types are invisible via reflection**, even in the same package. `MethodByName("dcValue")` on `reflect.ValueOf(dcValue.Instance().Interface())` returns invalid for unexported methods of `DcValue[T]`. Fix: use exported method names (e.g., `InternalKey` instead of `setKey`).
-- **`atomic.Value` requires consistent types**. Stores the first type; storing a different type panics at runtime. When JSON-decoding structs via `any`, `json.Unmarshal` into `*any` produces `map[string]any`, not the original struct. Fix: use `reflect.New(reflect.TypeOf(default))` to allocate the correct concrete type before unmarshaling.
+- **Unexported methods on generic types are invisible via reflection**, even in the same package. Fix: use exported method names (e.g., `InternalKey` instead of `setKey`).
+- **`atomic.Value` requires consistent types**. When JSON-decoding structs via `any`, `json.Unmarshal` into `*any` produces `map[string]any`, not the original struct. Fix: use `reflect.New(reflect.TypeOf(default))` to allocate the correct concrete type before unmarshaling.
 - **Struct fields passed by value to `interface{}` are not addressable** via reflection. `RegisterConfig` must take a pointer so `fv.CanAddr()` returns true for fields.
+- **Detecting struct vs scalar generic types** is done at construction time via `reflect.TypeOf(defaultValue).Kind() == reflect.Struct`. This is more reliable than checking method signatures at registration time.
 
-### Concurrency
-- Reading `len(map)` without holding the mutex that protects the map triggers the race detector. Always access shared state under the appropriate lock.
-- `prometheus.MustRegister` to the global registry panics on duplicate registration. Use `prometheus.NewRegistry()` per SDK instance.
+### DcStruct Merge into DcValue
+- **A single `DcValue[T]` replaces both `DcValue[T]` and `DcStruct[T]`**. The kind (scalar vs struct) is determined once at construction and stored in the `kind` field. This simplifies the entire registration pipeline — no need for `isDcStruct`, `handleDcStruct`, or `RegisterStruct`.
+- **The `entryKind` enum in `poya.go` cleanly dispatches decoding**. `updateEntry` switches on `entry.kind` to call either `updateScalarEntry` (type switch via `parseValue`) or `updateStructEntry` (JSON unmarshal via `reflect.New`).
 
-### Metrics Pattern
-- Use an interface (`Metrics`) with a no-op stub (`noopMetrics`) for the disabled case. This avoids if-checks in hot paths — the interface dispatch is cheaper and cleaner.
+### Polling Provider Pattern
+- **All polling providers (Redis, Vault, MySQL, PostgreSQL) share the same structure**: initial fetch for baseline, `time.Ticker` loop, deduplicate via `lastValue` comparison, exit on `ctx.Done()`. When adding a new polling provider, copy this exact pattern.
+- **Polling providers should silently skip errors** in the watch loop (`continue` on error) rather than returning, since transient failures are expected and the next tick will retry.
+- **SQL providers use a `Repository` interface** so users can inject custom query logic for non-standard table schemas. The `DefaultRepository` handles simple key-value tables.
+
+### Logger Interface Design
+- **Follow the sugared-logger pattern** (`Debug(msg string, keysAndValues ...any)`) rather than structured `slog.With(...)` style. This matches idiomatic Go logging APIs (zap sugared, klog).
+- **Always provide a noop stub** (`noopLogger`) for the disabled case, same pattern as `NoopMetrics`. This eliminates nil-checks and if-checks at call sites.
+
+### Metrics Package Organization
+- **Split the Metrics interface from its implementations**. The interface lives in `metrics/metrics.go` (package `metrics`), while implementations live in `metrics/prometheus/`, `metrics/otel/`, `metrics/expvar/`. This keeps the interface importable without pulling in backend dependencies.
+- **expvar package name conflicts with stdlib**: The `metrics/expvar` package is named `expvar`, which shadows the stdlib `expvar` package. Use `expvar_test` as the test package name to avoid import issues. Use `publishOrGetMap`/`publishOrGetInt` helpers to handle duplicate `expvar.Publish` panics in tests.
+
+### Struct Tag Parsing
+- **The `poyaTag` struct uses `key` and `prefix` fields** parsed from comma-separated tag values (`poya:"key=host,prefix=db"`). Fields without any tag default to their lowercased field name.
+
+### Concurrent Agent Pitfalls
+- **Multiple agents editing the same file will conflict and overwrite each other's changes**. When coordinating many parallel tasks, agents must not touch the same files. If they do, the last writer wins and earlier changes are lost. Plan agent scopes carefully to avoid overlap.

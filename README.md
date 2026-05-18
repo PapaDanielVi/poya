@@ -5,18 +5,32 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/PapaDanielVi/poya.svg)](https://pkg.go.dev/github.com/PapaDanielVi/poya)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**poya** is a Go SDK for dynamic runtime configuration. Register typed config values, connect a backend provider (etcd, Redis, or HashiCorp Vault), and the SDK keeps everything in sync in the background. Your application only calls `Get()` — no polling, no refresh logic.
+**poya** is a Go SDK for dynamic runtime configuration. Register typed config values, connect a backend provider (etcd, Redis, HashiCorp Vault, MySQL, or PostgreSQL), and the SDK keeps everything in sync in the background. Your application only calls `Get()` — no polling, no refresh logic.
 
 ## Features
 
-- **Type-safe generics** — `DcValue[string]`, `DcValue[int]`, `DcStruct[YourConfig]`, any type you need
-- **Custom struct support** — register complex structs as config values; the SDK JSON-decodes provider data into them automatically
+- **Type-safe generics** — `DcValue[string]`, `DcValue[int]`, `DcValue[YourConfig]`, any type you need
+- **Scalar and struct values** — a single `DcValue[T]` type handles both; scalars are parsed via type switch, structs are JSON-decoded automatically
 - **Declarative config structs** — define your entire config layout in a single struct with tags; poya discovers and registers all fields via reflection
-- **Multiple providers** — etcd (watch API), Redis (polling), HashiCorp Vault (KV v2 polling)
+- **Multiple providers** — etcd (watch API), Redis (polling), HashiCorp Vault (KV v2 polling), MySQL (polling), PostgreSQL (polling)
 - **Lock-free reads** — `Get()` uses `atomic.Value` for zero-contention reads on the hot path
-- **Prometheus metrics** — optional built-in metrics for watch events, errors, update latency, and registered key count
+- **Pluggable metrics** — Prometheus (default), OpenTelemetry, expvar, or inject your own implementation
+- **Structured logging** — inject any logger; defaults to stderr via `log/slog`
 - **Prefix & nesting** — hierarchical key management with automatic prefix accumulation for nested structs
 - **Graceful shutdown** — context-based cancellation cleans up all background goroutines
+
+## Supported Scalar Types
+
+`DcValue[T]` supports these scalar types for automatic string parsing:
+
+| Category | Types |
+|----------|-------|
+| Signed integers | `int`, `int8`, `int16`, `int32`, `int64` |
+| Unsigned integers | `uint`, `uint8`, `uint16`, `uint32`, `uint64` |
+| Floating point | `float32`, `float64` |
+| Other | `string`, `bool`, `time.Duration`, `[]byte` |
+
+Any other type falls through to raw string return.
 
 ## Installation
 
@@ -34,6 +48,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/PapaDanielVi/poya"
 	"github.com/PapaDanielVi/poya/provider/redis"
@@ -54,7 +69,7 @@ func main() {
 	})
 
 	// 3. Register values individually
-	timeout := poya.NewDcValue(30 * time.Second)
+	timeout := poya.NewDcValue("30s")
 	poya.Register(sdk, "timeout", timeout)
 
 	// 4. Start background sync
@@ -68,21 +83,20 @@ func main() {
 
 ## API Reference
 
-### Scalar Values — `DcValue[T]`
+### Values — `DcValue[T]`
 
-For primitive and simple types (`string`, `int`, `bool`, `float64`, `time.Duration`, etc.):
+A single generic type handles both scalars and structs. The SDK determines which at registration time via reflection.
+
+**Scalar values** (`string`, `int`, `bool`, `float64`, etc.):
 
 ```go
 val := poya.NewDcValue("default_value")
 poya.Register(sdk, "my_key", val)
 
-// Anywhere in your app:
 current := val.Get() // returns string
 ```
 
-### Struct Values — `DcStruct[T]`
-
-For complex configuration objects. The provider stores a JSON blob; poya decodes it into your struct:
+**Struct values** — the provider stores a JSON blob; poya decodes it into your struct:
 
 ```go
 type DatabaseConfig struct {
@@ -92,10 +106,9 @@ type DatabaseConfig struct {
 }
 
 dbDefault := DatabaseConfig{Host: "localhost", Port: 5432, MaxConn: 10}
-dbVal := poya.NewDcStruct(dbDefault)
-poya.RegisterStruct(sdk, "database", dbVal)
+dbVal := poya.NewDcValue(dbDefault)
+poya.Register(sdk, "database", dbVal)
 
-// Anywhere in your app:
 cfg := dbVal.Get() // returns DatabaseConfig
 fmt.Println(cfg.Host)
 ```
@@ -106,15 +119,10 @@ Define your entire configuration in a single struct. poya uses struct tags to di
 
 ```go
 type AppConfig struct {
-	// Scalar values: use `key=` to specify the provider key
-	Timeout  poya.DcValue[time.Duration] `poya:"key=timeout"`
+	Timeout  poya.DcValue[string]        `poya:"key=timeout"`
 	Verbose  poya.DcValue[bool]          `poya:"key=verbose"`
-
-	// Struct values: also use `key=`
-	DBConfig poya.DcStruct[DatabaseConfig] `poya:"key=db_config"`
-
-	// Nested structs: use `prefix=` to build hierarchical keys
-	DB       DBConfig `poya:"prefix=db"`
+	DBConfig poya.DcValue[DatabaseConfig] `poya:"key=db_config"`
+	DB       DBConfig                     `poya:"prefix=db"`
 }
 
 type DBConfig struct {
@@ -123,9 +131,9 @@ type DBConfig struct {
 }
 
 cfg := AppConfig{
-	Timeout:  *poya.NewDcValue(30 * time.Second),
+	Timeout:  *poya.NewDcValue("30s"),
 	Verbose:  *poya.NewDcValue(false),
-	DBConfig: *poya.NewDcStruct(DatabaseConfig{Host: "localhost", Port: 5432}),
+	DBConfig: *poya.NewDcValue(DatabaseConfig{Host: "localhost", Port: 5432}),
 	DB: DBConfig{
 		Host: *poya.NewDcValue("localhost"),
 		Port: *poya.NewDcValue(5432),
@@ -160,7 +168,9 @@ Example with Prefix="myapp/":
 
 ### Metrics
 
-Enable Prometheus metrics with `EnableMetrics: true`:
+poya supports multiple metrics backends. Inject any via `Config.Metrics`:
+
+**Prometheus** (default when `EnableMetrics: true`):
 
 ```go
 sdk := poya.New(poya.Config{
@@ -170,7 +180,40 @@ sdk := poya.New(poya.Config{
 })
 ```
 
-When enabled, poya collects:
+**OpenTelemetry**:
+
+```go
+meter := otel.Meter("github.com/PapaDanielVi/poya")
+otelMetrics, _ := otel.New(meter)
+sdk := poya.New(poya.Config{Provider: rdb, Metrics: otelMetrics})
+```
+
+**expvar** (zero external dependencies):
+
+```go
+sdk := poya.New(poya.Config{Provider: rdb, Metrics: expvar.New()})
+```
+
+**Custom implementation**:
+
+```go
+sdk := poya.New(poya.Config{Provider: rdb, Metrics: myCustomMetrics})
+```
+
+All backends implement the same interface:
+
+```go
+type Metrics interface {
+	IncWatchEvents(key string)
+	IncWatchErrors(key string)
+	ObserveUpdateLatency(key string, d time.Duration)
+	SetRegisteredKeys(n int)
+}
+```
+
+When metrics are disabled, a no-op stub is used — no if-checks in hot paths.
+
+**Prometheus metrics:**
 
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -179,7 +222,29 @@ When enabled, poya collects:
 | `poya_sync_update_latency_seconds` | Histogram | Value update latency (labeled by key) |
 | `poya_registered_keys` | Gauge | Number of registered config keys |
 
-Each SDK instance uses its own Prometheus registry, so multiple instances won't conflict. When metrics are disabled, a no-op stub is used — no if-checks in hot paths.
+Each SDK instance uses its own Prometheus registry, so multiple instances won't conflict.
+
+### Logging
+
+poya uses a simple structured-logger interface. Inject any logger via `Config.Logger`:
+
+```go
+sdk := poya.New(poya.Config{
+	Provider: rdb,
+	Logger:   myCustomLogger,
+})
+```
+
+The default logger writes to stderr via `log/slog`. The interface:
+
+```go
+type Logger interface {
+	Debug(msg string, keysAndValues ...any)
+	Info(msg string, keysAndValues ...any)
+	Warn(msg string, keysAndValues ...any)
+	Error(msg string, keysAndValues ...any)
+}
+```
 
 ## Provider Setup
 
@@ -234,6 +299,83 @@ if err != nil {
 sdk := poya.New(poya.Config{Provider: v, Prefix: "myapp/"})
 ```
 
+### MySQL
+
+Polls a database table at a configurable interval. Accepts an existing `*sql.DB` connection (you manage the lifecycle):
+
+**Using the default repository** (simple key-value table):
+
+```go
+import (
+	"database/sql"
+	"github.com/PapaDanielVi/poya/provider/mysql"
+	_ "github.com/go-sql-driver/mysql"
+)
+
+db, _ := sql.Open("mysql", "user:pass@tcp(localhost:3306)/configdb")
+provider, _ := mysql.New(mysql.Config{
+	DB:           db,
+	TableName:    "config",
+	KeyColumn:   "config_key",
+	ValueColumn: "config_value",
+	PollInterval: 5 * time.Second,
+})
+
+sdk := poya.New(poya.Config{Provider: provider, Prefix: "myapp/"})
+```
+
+**Using a custom repository** (any table schema):
+
+```go
+type MyRepository struct {
+	db *sql.DB
+}
+
+func (r *MyRepository) Get(ctx context.Context, key string) (string, error) {
+	// Custom query logic for your schema
+	var value string
+	err := r.db.QueryRowContext(ctx, "SELECT value FROM my_table WHERE name = ?", key).Scan(&value)
+	return value, err
+}
+
+provider, _ := mysql.New(mysql.Config{
+	Repository:   &MyRepository{db: db},
+	PollInterval: 5 * time.Second,
+})
+```
+
+### PostgreSQL
+
+Same interface as MySQL, with PostgreSQL-specific placeholder syntax:
+
+```go
+import (
+	"database/sql"
+	"github.com/PapaDanielVi/poya/provider/postgresql"
+	_ "github.com/lib/pq"
+)
+
+db, _ := sql.Open("postgres", "postgres://user:pass@localhost/configdb?sslmode=disable")
+provider, _ := postgresql.New(postgresql.Config{
+	DB:           db,
+	TableName:    "config",
+	KeyColumn:   "config_key",
+	ValueColumn: "config_value",
+	PollInterval: 5 * time.Second,
+})
+
+sdk := poya.New(poya.Config{Provider: provider, Prefix: "myapp/"})
+```
+
+Custom repositories work identically to MySQL:
+
+```go
+provider, _ := postgresql.New(postgresql.Config{
+	Repository:   &MyRepository{db: db},
+	PollInterval: 5 * time.Second,
+})
+```
+
 ## Use Cases
 
 - **Feature flags** — toggle features at runtime without redeployment
@@ -247,15 +389,22 @@ sdk := poya.New(poya.Config{Provider: v, Prefix: "myapp/"})
 
 ```
 poya/
-├── poya.go              # SDK: New, Start, Stop, Register, RegisterConfig
-├── dcvalue.go           # DcValue[T] — scalar config value
-├── dcstruct.go          # DcStruct[T] — struct config value (JSON-decoded)
-├── metrics.go           # Metrics interface, Prometheus impl, no-op stub
+├── poya.go                    # SDK: New, Start, Stop, Register, RegisterConfig
+├── dcvalue.go                 # DcValue[T] — unified scalar + struct config value
+├── metrics/
+│   ├── metrics.go             # Metrics interface + NoopMetrics stub
+│   ├── prometheus/            # Prometheus implementation
+│   ├── otel/                  # OpenTelemetry implementation
+│   └── expvar/                # expvar implementation (zero dependencies)
+├── logger/
+│   └── logger.go              # Logger interface + slog default + noop stub
 ├── provider/
-│   ├── provider.go      # Provider interface
-│   ├── etcd/            # etcd provider (native Watch API)
-│   ├── redis/           # Redis provider (polling)
-│   └── vault/           # HashiCorp Vault provider (KV v2 polling)
+│   ├── provider.go            # Provider interface
+│   ├── etcd/                  # etcd provider (native Watch API)
+│   ├── redis/                 # Redis provider (polling)
+│   ├── vault/                 # HashiCorp Vault provider (KV v2 polling)
+│   ├── mysql/                 # MySQL provider (polling, Repository interface)
+│   └── postgresql/            # PostgreSQL provider (polling, Repository interface)
 └── ...
 ```
 

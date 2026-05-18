@@ -2,14 +2,16 @@ package poya
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/PapaDanielVi/poya/metrics"
+	prom "github.com/PapaDanielVi/poya/metrics/prometheus"
 	"github.com/PapaDanielVi/poya/provider"
 )
 
-// mockProvider is a test double for provider.Provider.
 type mockProvider struct {
 	mu      sync.Mutex
 	values  map[string]string
@@ -66,16 +68,25 @@ func TestNewSDKWithMetrics(t *testing.T) {
 	if sdk == nil {
 		t.Fatal("New() returned nil")
 	}
-	if _, ok := sdk.metrics.(*realMetrics); !ok {
-		t.Error("expected realMetrics when EnableMetrics is true")
+	if _, ok := sdk.metrics.(*prom.RealMetrics); !ok {
+		t.Error("expected *prom.RealMetrics when EnableMetrics is true")
 	}
 }
 
 func TestNewSDKWithoutMetrics(t *testing.T) {
 	p := newMockProvider()
 	sdk := New(Config{Provider: p})
-	if _, ok := sdk.metrics.(noopMetrics); !ok {
-		t.Error("expected noopMetrics when EnableMetrics is false")
+	if _, ok := sdk.metrics.(metrics.NoopMetrics); !ok {
+		t.Error("expected metrics.NoopMetrics when EnableMetrics is false")
+	}
+}
+
+func TestNewSDKWithCustomMetrics(t *testing.T) {
+	p := newMockProvider()
+	fm := &fakeMetrics{}
+	sdk := New(Config{Provider: p, Metrics: fm})
+	if sdk.metrics != fm {
+		t.Error("expected custom metrics to be used")
 	}
 }
 
@@ -178,7 +189,7 @@ func TestRegisterConfigNoTag(t *testing.T) {
 	}
 }
 
-func TestRegisterConfigDcStruct(t *testing.T) {
+func TestRegisterConfigStruct(t *testing.T) {
 	type DBConfig struct {
 		Host string `json:"host"`
 		Port int    `json:"port"`
@@ -187,8 +198,8 @@ func TestRegisterConfigDcStruct(t *testing.T) {
 	p := newMockProvider()
 	sdk := New(Config{Provider: p, Prefix: "myapp/"})
 
-	val := NewDcStruct(DBConfig{Host: "localhost", Port: 5432})
-	RegisterStruct(sdk, "db", val)
+	val := NewDcValue(DBConfig{Host: "localhost", Port: 5432})
+	Register(sdk, "db", val)
 
 	sdk.mu.RLock()
 	defer sdk.mu.RUnlock()
@@ -198,7 +209,7 @@ func TestRegisterConfigDcStruct(t *testing.T) {
 		t.Fatal("db struct not registered")
 	}
 	if e.kind != entryKindStruct {
-		t.Error("expected entryKindStruct for DcStruct registration")
+		t.Error("expected entryKindStruct for struct-typed DcValue")
 	}
 }
 
@@ -209,7 +220,7 @@ func TestRegisterConfigMixed(t *testing.T) {
 	}
 	type AppConfig struct {
 		Timeout DcValue[time.Duration] `poya:"key=timeout"`
-		DB      DcStruct[DBDetails]    `poya:"key=db_config"`
+		DB      DcValue[DBDetails]     `poya:"key=db_config"`
 	}
 
 	p := newMockProvider()
@@ -217,7 +228,7 @@ func TestRegisterConfigMixed(t *testing.T) {
 
 	cfg := AppConfig{
 		Timeout: *NewDcValue(5 * time.Second),
-		DB:      *NewDcStruct(DBDetails{Host: "localhost", Port: 5432}),
+		DB:      *NewDcValue(DBDetails{Host: "localhost", Port: 5432}),
 	}
 
 	RegisterConfig(sdk, &cfg)
@@ -230,7 +241,7 @@ func TestRegisterConfigMixed(t *testing.T) {
 		t.Fatal("timeout not registered")
 	}
 	if timeoutEntry.kind != entryKindScalar {
-		t.Error("expected entryKindScalar for DcValue")
+		t.Error("expected entryKindScalar for DcValue[time.Duration]")
 	}
 
 	dbEntry, ok := sdk.values["myapp/db_config"]
@@ -238,7 +249,7 @@ func TestRegisterConfigMixed(t *testing.T) {
 		t.Fatal("db_config not registered")
 	}
 	if dbEntry.kind != entryKindStruct {
-		t.Error("expected entryKindStruct for DcStruct")
+		t.Error("expected entryKindStruct for DcValue[DBDetails]")
 	}
 }
 
@@ -304,8 +315,8 @@ func TestStartUpdatesStructValue(t *testing.T) {
 	}
 
 	sdk := New(Config{Provider: p, Prefix: "test/"})
-	val := NewDcStruct(DBConfig{})
-	RegisterStruct(sdk, "db", val)
+	val := NewDcValue(DBConfig{})
+	Register(sdk, "db", val)
 
 	sdk.Start()
 
@@ -325,6 +336,52 @@ func TestStartUpdatesStructValue(t *testing.T) {
 	sdk.Stop()
 }
 
+func TestCustomMetricsReceiveEvents(t *testing.T) {
+	type DBConfig struct {
+		Host string `json:"host"`
+		Port int    `json:"port"`
+	}
+
+	p := newMockProvider()
+	fm := &fakeMetrics{}
+
+	updateCh := make(chan struct{}, 1)
+	p.watchFn = func(ctx context.Context, key string, onChange func(key string, value string)) error {
+		if key == "test/db" {
+			onChange(key, `{"host":"localhost","port":5432}`)
+			go func() {
+				time.Sleep(50 * time.Millisecond)
+				onChange(key, `{"host":"remote","port":3306}`)
+				updateCh <- struct{}{}
+			}()
+		}
+		<-ctx.Done()
+		return nil
+	}
+
+	sdk := New(Config{Provider: p, Prefix: "test/", Metrics: fm})
+	val := NewDcValue(DBConfig{})
+	Register(sdk, "db", val)
+
+	sdk.Start()
+
+	select {
+	case <-updateCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for update signal")
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	sdk.Stop()
+
+	if fm.watchEvents == 0 {
+		t.Error("expected watch events to be recorded in custom metrics")
+	}
+	if fm.updateLatency == 0 {
+		t.Error("expected update latency to be recorded in custom metrics")
+	}
+}
+
 func TestParseValue(t *testing.T) {
 	tests := []struct {
 		raw  string
@@ -337,6 +394,20 @@ func TestParseValue(t *testing.T) {
 		{"true", false, true},
 		{"1", false, true},
 		{"false", true, false},
+		{"127", int8(0), int8(127)},
+		{"1000", int16(0), int16(1000)},
+		{"100000", int32(0), int32(100000)},
+		{"9223372036854775807", int64(0), int64(9223372036854775807)},
+		{"42", uint(0), uint(42)},
+		{"255", uint8(0), uint8(255)},
+		{"1000", uint16(0), uint16(1000)},
+		{"100000", uint32(0), uint32(100000)},
+		{"18446744073709551615", uint64(0), uint64(18446744073709551615)},
+		{"3.14", float32(0), float32(3.14)},
+		{"5s", time.Duration(0), 5 * time.Second},
+		{"1m30s", time.Duration(0), 90 * time.Second},
+		{"500ms", time.Duration(0), 500 * time.Millisecond},
+		{"hello", []byte{}, []byte("hello")},
 	}
 
 	for _, tt := range tests {
@@ -345,7 +416,7 @@ func TestParseValue(t *testing.T) {
 			t.Errorf("parseValue(%q, %v) error: %v", tt.raw, tt.def, err)
 			continue
 		}
-		if got != tt.want {
+		if !reflect.DeepEqual(got, tt.want) {
 			t.Errorf("parseValue(%q, %v) = %v, want %v", tt.raw, tt.def, got, tt.want)
 		}
 	}
@@ -412,12 +483,39 @@ func TestSDKStopCancelsWatchers(t *testing.T) {
 }
 
 func TestNoopMetrics(_ *testing.T) {
-	m := noopMetrics{}
+	m := metrics.NoopMetrics{}
 	m.IncWatchEvents("key")
 	m.IncWatchErrors("key")
 	m.ObserveUpdateLatency("key", time.Second)
 	m.SetRegisteredKeys(5)
 }
 
-// Ensure mockProvider implements provider.Provider
+type fakeMetrics struct {
+	mu            sync.Mutex
+	watchEvents   int
+	watchErrors   int
+	updateLatency time.Duration
+}
+
+func (f *fakeMetrics) IncWatchEvents(_ string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.watchEvents++
+}
+
+func (f *fakeMetrics) IncWatchErrors(_ string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.watchErrors++
+}
+
+func (f *fakeMetrics) ObserveUpdateLatency(_ string, d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updateLatency += d
+}
+
+func (f *fakeMetrics) SetRegisteredKeys(_ int) {}
+
+var _ metrics.Metrics = (*fakeMetrics)(nil)
 var _ provider.Provider = (*mockProvider)(nil)
