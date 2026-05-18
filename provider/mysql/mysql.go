@@ -1,4 +1,6 @@
-// Package mysql provides a poya provider implementation using MySQL.
+// Package mysql implements the provider.Provider interface for MySQL configuration backends.
+// It polls a database table at a configurable interval to sync dynamic configuration values.
+// Supports custom Repository implementations for non-standard table schemas.
 package mysql
 
 import (

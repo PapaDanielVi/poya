@@ -1,4 +1,4 @@
-module github.com/PapaDanielVi/poya
+module github.com/PapaDanielVi/poya // Go SDK for dynamic runtime configuration with etcd, Redis, Vault, MySQL, PostgreSQL support
 
 go 1.26.3
 

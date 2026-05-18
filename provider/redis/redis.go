@@ -1,4 +1,5 @@
-// Package redis provides a poya provider implementation using Redis.
+// Package redis implements the provider.Provider interface for Redis configuration backends.
+// It polls Redis at a configurable interval to sync dynamic configuration values.
 package redis
 
 import (

@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 )
 
-// DcValue is a dynamically-configured value of type T.
+// DcValue is a dynamically-configured value of type T for dynamic configuration use cases.
 // Developers create instances via NewDcValue and pass them around the application.
 // Only Get() is public — all mutation is handled internally by the SDK.
 //

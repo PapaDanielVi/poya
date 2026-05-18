@@ -5,7 +5,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/PapaDanielVi/poya.svg)](https://pkg.go.dev/github.com/PapaDanielVi/poya)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**poya** is a Go SDK for dynamic runtime configuration. Register typed config values, connect a backend provider (etcd, Redis, HashiCorp Vault, MySQL, or PostgreSQL), and the SDK keeps everything in sync in the background. Your application only calls `Get()` — no polling, no refresh logic.
+**poya** is a Go SDK for dynamic runtime configuration and configuration management. Register typed config values, connect a backend provider (etcd, Redis, HashiCorp Vault, MySQL, or PostgreSQL), and the SDK keeps everything in sync in the background. Your application only calls `Get()` — no polling, no refresh logic. Supports use cases including feature flags, A/B testing, service discovery, and runtime parameter tuning.
 
 ## Features
 
@@ -411,6 +411,10 @@ poya/
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on adding providers, value types, and submitting pull requests.
+
+## Keywords
+
+Go, Golang, SDK, dynamic config, runtime configuration, configuration management, feature flags, A/B testing, service discovery, etcd, Redis, HashiCorp Vault, MySQL, PostgreSQL, type-safe config, generic config, Go SDK
 
 ## License
 

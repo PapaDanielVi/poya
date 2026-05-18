@@ -1,7 +1,8 @@
-// Package poya provides dynamic runtime configuration for Go applications.
-// Developers register typed DcValue[T] instances, choose a provider (etcd,
-// Redis, HashiCorp Vault, MySQL, or PostgreSQL), and the SDK keeps values in
-// sync in the background. Developers only call Get() to read the latest value.
+// Package poya provides dynamic runtime configuration and configuration management
+// for Go applications. It supports type-safe generic config values (scalars and structs)
+// synced from etcd, Redis, HashiCorp Vault, MySQL, or PostgreSQL backends.
+// Developers register DcValue[T] instances and call Get() to read the latest values
+// for use cases like feature flags, service discovery, and runtime parameter tuning.
 package poya
 
 import (

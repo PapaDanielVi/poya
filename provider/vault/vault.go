@@ -1,4 +1,5 @@
-// Package vault provides a poya provider implementation using HashiCorp Vault.
+// Package vault implements the provider.Provider interface for HashiCorp Vault KV v2 backends.
+// It polls Vault secrets at a configurable interval to sync dynamic configuration and feature flags.
 package vault
 
 import (

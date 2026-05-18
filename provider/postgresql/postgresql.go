@@ -1,4 +1,6 @@
-// Package postgresql provides a poya provider implementation using PostgreSQL.
+// Package postgresql implements the provider.Provider interface for PostgreSQL configuration backends.
+// It polls a database table at a configurable interval to sync dynamic configuration values.
+// Supports custom Repository implementations for non-standard table schemas.
 package postgresql
 
 import (

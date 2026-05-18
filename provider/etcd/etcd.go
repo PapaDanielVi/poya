@@ -1,4 +1,5 @@
-// Package etcd provides a poya provider implementation using etcd.
+// Package etcd implements the provider.Provider interface for etcd configuration backends.
+// It uses etcd's native Watch API for event-driven dynamic configuration updates.
 package etcd
 
 import (
