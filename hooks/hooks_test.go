@@ -1,4 +1,4 @@
-package hooks
+package hooks_test
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/PapaDanielVi/poya"
+	"github.com/PapaDanielVi/poya/hooks"
 	"github.com/PapaDanielVi/poya/provider"
 	"github.com/mitchellh/mapstructure"
 )
@@ -43,12 +44,6 @@ func (m *integMockProvider) Watch(ctx context.Context, keys []string, onChange f
 
 func (m *integMockProvider) Close() error { return nil }
 
-func (m *integMockProvider) set(key, value string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.values[key] = value
-}
-
 var _ provider.Provider = (*integMockProvider)(nil)
 
 type testConfig struct {
@@ -67,27 +62,28 @@ type testStructConfig struct {
 }
 
 type mixedConfig struct {
-	Name    string              `mapstructure:"name"`
-	Timeout *poya.DcValue[int]  `mapstructure:"timeout"`
+	Name    string             `mapstructure:"name"`
+	Timeout *poya.DcValue[int] `mapstructure:"timeout"`
 }
 
-func decodeHook(t *testing.T, input interface{}, target interface{}) {
+func decodeHook(t *testing.T, input any, target any) {
 	t.Helper()
 	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		DecodeHook: MapstructureHookFunc(),
+		DecodeHook: hooks.MapstructureHookFunc(),
 		Result:     target,
 	})
 	if err != nil {
 		t.Fatalf("NewDecoder error: %v", err)
 	}
-	if err := decoder.Decode(input); err != nil {
+	if err = decoder.Decode(input); err != nil {
 		t.Fatalf("Decode error: %v", err)
 	}
 }
 
 func TestMapstructureHookFunc_ScalarString(t *testing.T) {
+	t.Parallel()
 	var cfg testConfig
-	decodeHook(t, map[string]interface{}{"host": "example.com"}, &cfg)
+	decodeHook(t, map[string]any{"host": "example.com"}, &cfg)
 
 	if cfg.Host == nil {
 		t.Fatal("Host is nil")
@@ -98,8 +94,9 @@ func TestMapstructureHookFunc_ScalarString(t *testing.T) {
 }
 
 func TestMapstructureHookFunc_ScalarIntFromFloat64(t *testing.T) {
+	t.Parallel()
 	var cfg testConfig
-	decodeHook(t, map[string]interface{}{"port": float64(8080)}, &cfg)
+	decodeHook(t, map[string]any{"port": float64(8080)}, &cfg)
 
 	if cfg.Port == nil {
 		t.Fatal("Port is nil")
@@ -110,8 +107,9 @@ func TestMapstructureHookFunc_ScalarIntFromFloat64(t *testing.T) {
 }
 
 func TestMapstructureHookFunc_ScalarBool(t *testing.T) {
+	t.Parallel()
 	var cfg testConfig
-	decodeHook(t, map[string]interface{}{"verbose": true}, &cfg)
+	decodeHook(t, map[string]any{"verbose": true}, &cfg)
 
 	if cfg.Verbose == nil {
 		t.Fatal("Verbose is nil")
@@ -122,9 +120,10 @@ func TestMapstructureHookFunc_ScalarBool(t *testing.T) {
 }
 
 func TestMapstructureHookFunc_StructT(t *testing.T) {
+	t.Parallel()
 	var cfg testStructConfig
-	decodeHook(t, map[string]interface{}{
-		"db": map[string]interface{}{
+	decodeHook(t, map[string]any{
+		"db": map[string]any{
 			"host": "localhost",
 			"port": float64(5432),
 		},
@@ -140,11 +139,12 @@ func TestMapstructureHookFunc_StructT(t *testing.T) {
 }
 
 func TestMapstructureHookFunc_PreInitializedTarget(t *testing.T) {
+	t.Parallel()
 	cfg := testConfig{
 		Host: poya.NewDcValue("default-host"),
 	}
 	originalPtr := cfg.Host
-	decodeHook(t, map[string]interface{}{"host": "new-host"}, &cfg)
+	decodeHook(t, map[string]any{"host": "new-host"}, &cfg)
 
 	if cfg.Host != originalPtr {
 		t.Fatal("Host pointer changed; expected in-place update")
@@ -155,8 +155,9 @@ func TestMapstructureHookFunc_PreInitializedTarget(t *testing.T) {
 }
 
 func TestMapstructureHookFunc_NilTarget(t *testing.T) {
+	t.Parallel()
 	var cfg testConfig
-	decodeHook(t, map[string]interface{}{"host": "from-yaml"}, &cfg)
+	decodeHook(t, map[string]any{"host": "from-yaml"}, &cfg)
 
 	if cfg.Host == nil {
 		t.Fatal("Host is nil; expected allocation")
@@ -167,8 +168,9 @@ func TestMapstructureHookFunc_NilTarget(t *testing.T) {
 }
 
 func TestMapstructureHookFunc_PassThrough(t *testing.T) {
+	t.Parallel()
 	var cfg mixedConfig
-	decodeHook(t, map[string]interface{}{
+	decodeHook(t, map[string]any{
 		"name":    "myapp",
 		"timeout": float64(30),
 	}, &cfg)
@@ -185,8 +187,9 @@ func TestMapstructureHookFunc_PassThrough(t *testing.T) {
 }
 
 func TestMapstructureHookFunc_MissingKey(t *testing.T) {
+	t.Parallel()
 	var cfg testConfig
-	decodeHook(t, map[string]interface{}{}, &cfg)
+	decodeHook(t, map[string]any{}, &cfg)
 
 	if cfg.Host != nil {
 		t.Fatal("Host should be nil when key is missing from input")
@@ -194,9 +197,10 @@ func TestMapstructureHookFunc_MissingKey(t *testing.T) {
 }
 
 func TestMapstructureHookFunc_KindDetection(t *testing.T) {
+	t.Parallel()
 	var cfg testStructConfig
-	decodeHook(t, map[string]interface{}{
-		"db": map[string]interface{}{
+	decodeHook(t, map[string]any{
+		"db": map[string]any{
 			"host": "localhost",
 			"port": float64(5432),
 		},
@@ -207,15 +211,16 @@ func TestMapstructureHookFunc_KindDetection(t *testing.T) {
 	}
 
 	var cfg2 testConfig
-	decodeHook(t, map[string]interface{}{"host": "example.com"}, &cfg2)
+	decodeHook(t, map[string]any{"host": "example.com"}, &cfg2)
 	if cfg2.Host.InternalKind() != 0 { // entryKindScalar == 0
 		t.Fatalf("Host.InternalKind() = %d, want 0 (entryKindScalar)", cfg2.Host.InternalKind())
 	}
 }
 
 func TestMapstructureHookFunc_ComposeWithWeaklyTyped(t *testing.T) {
+	t.Parallel()
 	hook := mapstructure.ComposeDecodeHookFunc(
-		MapstructureHookFunc(),
+		hooks.MapstructureHookFunc(),
 		mapstructure.StringToTimeDurationHookFunc(),
 	)
 
@@ -227,7 +232,7 @@ func TestMapstructureHookFunc_ComposeWithWeaklyTyped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDecoder error: %v", err)
 	}
-	if err := decoder.Decode(map[string]interface{}{"port": float64(42)}); err != nil {
+	if err = decoder.Decode(map[string]any{"port": float64(42)}); err != nil {
 		t.Fatalf("Decode error: %v", err)
 	}
 
@@ -240,17 +245,18 @@ func TestMapstructureHookFunc_ComposeWithWeaklyTyped(t *testing.T) {
 }
 
 func TestMapstructureHookFunc_HookFuncValue(t *testing.T) {
-	hook := MapstructureHookFuncValue()
+	t.Parallel()
+	hook := hooks.MapstructureHookFuncValue()
 
 	var cfg testConfig
 	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		DecodeHook: mapstructure.DecodeHookFuncValue(hook),
+		DecodeHook: hook,
 		Result:     &cfg,
 	})
 	if err != nil {
 		t.Fatalf("NewDecoder error: %v", err)
 	}
-	if err := decoder.Decode(map[string]interface{}{"host": "value-test"}); err != nil {
+	if err := decoder.Decode(map[string]any{"host": "value-test"}); err != nil {
 		t.Fatalf("Decode error: %v", err)
 	}
 
@@ -260,11 +266,12 @@ func TestMapstructureHookFunc_HookFuncValue(t *testing.T) {
 }
 
 func TestMapstructureHookFunc_StructDefaultValue(t *testing.T) {
+	t.Parallel()
 	cfg := testStructConfig{
 		DB: poya.NewDcValue(dbConfig{Host: "default", Port: 3306}),
 	}
-	decodeHook(t, map[string]interface{}{
-		"db": map[string]interface{}{
+	decodeHook(t, map[string]any{
+		"db": map[string]any{
 			"host": "override",
 			"port": float64(5432),
 		},
@@ -277,8 +284,9 @@ func TestMapstructureHookFunc_StructDefaultValue(t *testing.T) {
 }
 
 func TestMapstructureHookFunc_AllScalarFields(t *testing.T) {
+	t.Parallel()
 	var cfg testConfig
-	decodeHook(t, map[string]interface{}{
+	decodeHook(t, map[string]any{
 		"host":    "api.example.com",
 		"port":    float64(443),
 		"verbose": true,
@@ -296,9 +304,8 @@ func TestMapstructureHookFunc_AllScalarFields(t *testing.T) {
 }
 
 func TestMapstructureHookFunc_ReturnType(t *testing.T) {
-	hook := MapstructureHookFunc()
-	// Verify it satisfies the expected type.
-	var _ mapstructure.DecodeHookFunc = hook
+	t.Parallel()
+	hook := hooks.MapstructureHookFunc()
 
 	// Verify the underlying func type is correct.
 	rv := reflect.ValueOf(hook)
@@ -308,6 +315,7 @@ func TestMapstructureHookFunc_ReturnType(t *testing.T) {
 }
 
 func TestHookThenRegisterConfig_EndToEnd(t *testing.T) {
+	t.Parallel()
 	type AppConfig struct {
 		Host    *poya.DcValue[string] `mapstructure:"host" poya:"key=db_host"`
 		Port    *poya.DcValue[int]    `mapstructure:"port" poya:"key=db_port"`
@@ -316,7 +324,7 @@ func TestHookThenRegisterConfig_EndToEnd(t *testing.T) {
 
 	// Step 1: Decode YAML-like map into struct using the hook.
 	var cfg AppConfig
-	decodeHook(t, map[string]interface{}{
+	decodeHook(t, map[string]any{
 		"host":    "db.example.com",
 		"port":    float64(3306),
 		"verbose": true,
@@ -338,8 +346,8 @@ func TestHookThenRegisterConfig_EndToEnd(t *testing.T) {
 	wg.Add(3)
 	blockingMock := &blockingMockProvider{
 		values: map[string]string{
-			"myapp/db_host":  "provider-host",
-			"myapp/db_port":  "5432",
+			"myapp/db_host": "provider-host",
+			"myapp/db_port": "5432",
 			"myapp/verbose": "false",
 		},
 		wg: &wg,
@@ -408,6 +416,7 @@ func (m *blockingMockProvider) Watch(ctx context.Context, keys []string, onChang
 func (m *blockingMockProvider) Close() error { return nil }
 
 func TestHookThenRegisterConfig_StructT(t *testing.T) {
+	t.Parallel()
 	type DBConfig struct {
 		Host string `json:"host"`
 		Port int    `json:"port"`
@@ -417,8 +426,8 @@ func TestHookThenRegisterConfig_StructT(t *testing.T) {
 	}
 
 	var cfg AppConfig
-	decodeHook(t, map[string]interface{}{
-		"db": map[string]interface{}{
+	decodeHook(t, map[string]any{
+		"db": map[string]any{
 			"host": "localhost",
 			"port": float64(5432),
 		},

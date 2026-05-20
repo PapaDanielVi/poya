@@ -31,7 +31,7 @@ func New() *Metrics {
 	}
 }
 
-// publishOrGetMap publishes a new expvar.Map if one with the given name
+// publishOrGetMap publishes a new [expvar.Map] if one with the given name
 // does not already exist, and returns it. If it exists, returns the existing one.
 func publishOrGetMap(name string) *expvar.Map {
 	if v := expvar.Get(name); v != nil {
@@ -44,7 +44,7 @@ func publishOrGetMap(name string) *expvar.Map {
 	return m
 }
 
-// publishOrGetInt publishes a new expvar.Int if one with the given name
+// publishOrGetInt publishes a new [expvar.Int] if one with the given name
 // does not already exist, and returns it. If it exists, returns the existing one.
 func publishOrGetInt(name string) *expvar.Int {
 	if v := expvar.Get(name); v != nil {

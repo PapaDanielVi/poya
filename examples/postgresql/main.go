@@ -22,8 +22,8 @@ package main
 
 import (
 	"database/sql"
-	"fmt"
-	"log"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/PapaDanielVi/poya"
@@ -31,10 +31,20 @@ import (
 	_ "github.com/lib/pq"
 )
 
+const (
+	pollInterval     = 5 * time.Second
+	defaultDBPort    = 5432
+	defaultDBHost    = "localhost"
+	defaultDBVerbose = false
+)
+
 func main() {
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
 	db, err := sql.Open("postgres", "postgres://postgres:root@localhost:5432/configdb?sslmode=disable")
 	if err != nil {
-		log.Fatal(err)
+		log.Error("failed to open postgres connection", "error", err)
+		os.Exit(1)
 	}
 	defer db.Close()
 
@@ -43,10 +53,11 @@ func main() {
 		TableName:    "config",
 		KeyColumn:    "config_key",
 		ValueColumn:  "config_value",
-		PollInterval: 5 * time.Second,
+		PollInterval: pollInterval,
 	})
 	if err != nil {
-		log.Fatal(err)
+		log.Error("failed to create postgresql provider", "error", err)
+		os.Exit(1)
 	}
 
 	sdk := poya.New(poya.Config{
@@ -55,7 +66,7 @@ func main() {
 	})
 
 	timeout := poya.NewDcValue("30s")
-	verbose := poya.NewDcValue(false)
+	verbose := poya.NewDcValue(defaultDBVerbose)
 	poya.Register(sdk, "timeout", timeout)
 	poya.Register(sdk, "verbose", verbose)
 
@@ -64,18 +75,21 @@ func main() {
 		Port poya.DcValue[int]    `poya:"key=port"`
 	}
 	cfg := DBConfig{
-		Host: *poya.NewDcValue("localhost"),
-		Port: *poya.NewDcValue(5432),
+		Host: *poya.NewDcValue(defaultDBHost),
+		Port: *poya.NewDcValue(defaultDBPort),
 	}
 	poya.RegisterConfig(sdk, &cfg)
 
 	sdk.Start()
 	defer sdk.Stop()
 
-	fmt.Println("Polling PostgreSQL every 5s — UPDATE config values to see changes reflected.")
+	log.Info("Polling PostgreSQL every 5s — UPDATE config values to see changes reflected.")
 	for {
-		fmt.Printf("  timeout=%s  verbose=%v  db.host=%s  db.port=%d\n",
-			timeout.Get(), verbose.Get(), cfg.Host.Get(), cfg.Port.Get())
-		time.Sleep(5 * time.Second)
+		log.Info("current config",
+			"timeout", timeout.Get(),
+			"verbose", verbose.Get(),
+			"db.host", cfg.Host.Get(),
+			"db.port", cfg.Port.Get())
+		time.Sleep(pollInterval)
 	}
 }

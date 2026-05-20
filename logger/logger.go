@@ -23,7 +23,7 @@ func New() Logger {
 	}
 }
 
-// NewWithHandler returns a Logger backed by the given slog.Handler.
+// NewWithHandler returns a Logger backed by the given [slog.Handler].
 // Useful for tests or custom formatting.
 func NewWithHandler(h slog.Handler) Logger {
 	return &slogLogger{l: slog.New(h)}
@@ -48,11 +48,3 @@ func (s *slogLogger) Warn(msg string, keysAndValues ...any) {
 func (s *slogLogger) Error(msg string, keysAndValues ...any) {
 	s.l.Error(msg, keysAndValues...)
 }
-
-// noopLogger is a no-op Logger used when logging is disabled.
-type noopLogger struct{}
-
-func (noopLogger) Debug(_ string, _ ...any) {}
-func (noopLogger) Info(_ string, _ ...any)  {}
-func (noopLogger) Warn(_ string, _ ...any)  {}
-func (noopLogger) Error(_ string, _ ...any) {}

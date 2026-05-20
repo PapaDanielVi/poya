@@ -13,21 +13,32 @@
 package main
 
 import (
-	"fmt"
-	"log"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/PapaDanielVi/poya"
 	"github.com/PapaDanielVi/poya/provider/etcd"
 )
 
+const (
+	pollInterval     = 5 * time.Second
+	dialTimeout      = 5 * time.Second
+	defaultDBPort    = 5432
+	defaultDBHost    = "localhost"
+	defaultDBVerbose = false
+)
+
 func main() {
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
 	provider, err := etcd.New(etcd.Config{
 		Endpoints:   []string{"localhost:2379"},
-		DialTimeout: 5 * time.Second,
+		DialTimeout: dialTimeout,
 	})
 	if err != nil {
-		log.Fatal(err)
+		log.Error("failed to create etcd provider", "error", err)
+		os.Exit(1)
 	}
 	defer provider.Close()
 
@@ -36,30 +47,31 @@ func main() {
 		Prefix:   "myapp/",
 	})
 
-	// Register individual values
 	timeout := poya.NewDcValue("30s")
-	verbose := poya.NewDcValue(false)
+	verbose := poya.NewDcValue(defaultDBVerbose)
 	poya.Register(sdk, "timeout", timeout)
 	poya.Register(sdk, "verbose", verbose)
 
-	// Register via config struct
 	type DBConfig struct {
 		Host poya.DcValue[string] `poya:"key=host"`
 		Port poya.DcValue[int]    `poya:"key=port"`
 	}
 	cfg := DBConfig{
-		Host: *poya.NewDcValue("localhost"),
-		Port: *poya.NewDcValue(5432),
+		Host: *poya.NewDcValue(defaultDBHost),
+		Port: *poya.NewDcValue(defaultDBPort),
 	}
 	poya.RegisterConfig(sdk, &cfg)
 
 	sdk.Start()
 	defer sdk.Stop()
 
-	fmt.Println("Watching etcd keys under myapp/ — change values with etcdctl to see updates.")
+	log.Info("Watching etcd keys under myapp/ — change values with etcdctl to see updates.")
 	for {
-		fmt.Printf("  timeout=%s  verbose=%v  db.host=%s  db.port=%d\n",
-			timeout.Get(), verbose.Get(), cfg.Host.Get(), cfg.Port.Get())
-		time.Sleep(5 * time.Second)
+		log.Info("current config",
+			"timeout", timeout.Get(),
+			"verbose", verbose.Get(),
+			"db.host", cfg.Host.Get(),
+			"db.port", cfg.Port.Get())
+		time.Sleep(pollInterval)
 	}
 }

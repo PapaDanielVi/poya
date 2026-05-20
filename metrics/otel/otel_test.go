@@ -1,4 +1,4 @@
-package otel
+package otel_test
 
 import (
 	"testing"
@@ -7,12 +7,13 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/PapaDanielVi/poya/metrics"
+	"github.com/PapaDanielVi/poya/metrics/otel"
 )
 
 func TestNew(t *testing.T) {
 	t.Parallel()
 	meter := noop.Meter{}
-	m, err := New(meter)
+	m, err := otel.New(meter)
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -24,7 +25,7 @@ func TestNew(t *testing.T) {
 func TestIncWatchEvents(t *testing.T) {
 	t.Parallel()
 	meter := noop.Meter{}
-	m, err := New(meter)
+	m, err := otel.New(meter)
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -35,7 +36,7 @@ func TestIncWatchEvents(t *testing.T) {
 func TestIncWatchErrors(t *testing.T) {
 	t.Parallel()
 	meter := noop.Meter{}
-	m, err := New(meter)
+	m, err := otel.New(meter)
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -45,7 +46,7 @@ func TestIncWatchErrors(t *testing.T) {
 func TestObserveUpdateLatency(t *testing.T) {
 	t.Parallel()
 	meter := noop.Meter{}
-	m, err := New(meter)
+	m, err := otel.New(meter)
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -55,7 +56,7 @@ func TestObserveUpdateLatency(t *testing.T) {
 func TestSetRegisteredKeys(t *testing.T) {
 	t.Parallel()
 	meter := noop.Meter{}
-	m, err := New(meter)
+	m, err := otel.New(meter)
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -63,4 +64,4 @@ func TestSetRegisteredKeys(t *testing.T) {
 }
 
 // Ensure Metrics implements the interface.
-var _ metrics.Metrics = (*Metrics)(nil)
+var _ metrics.Metrics = (*otel.Metrics)(nil)

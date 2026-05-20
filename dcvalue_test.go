@@ -123,7 +123,8 @@ func TestDcValueInternalSetJSONInvalid(t *testing.T) {
 	}
 }
 
-func TestDcValueStructConcurrentGetSet(_ *testing.T) {
+func TestDcValueStructConcurrentGetSet(t *testing.T) {
+	t.Parallel()
 	type Config struct {
 		Host string `json:"host"`
 		Port int    `json:"port"`

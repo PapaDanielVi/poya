@@ -7,7 +7,9 @@ package postgresql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -51,6 +53,7 @@ func NewDefaultRepository(db *sql.DB, table, keyColumn, valueColumn string) *Def
 
 // Get retrieves the value for a key from the PostgreSQL table.
 func (r *DefaultRepository) Get(ctx context.Context, key string) (string, error) {
+	//nolint:gosec // G201: table/column names are config-driven, not user input
 	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s = $1", r.valueColumn, r.tableName, r.keyColumn)
 	var value string
 	err := r.db.QueryRowContext(ctx, query, key).Scan(&value)
@@ -69,13 +72,14 @@ func (r *DefaultRepository) GetAll(ctx context.Context, keys []string) (map[stri
 		return make(map[string]string), nil
 	}
 	placeholders := make([]string, len(keys))
-	args := make([]interface{}, len(keys))
+	args := make([]any, len(keys))
 	for i, k := range keys {
 		placeholders[i] = fmt.Sprintf("$%d", i+1)
 		args[i] = k
 	}
+	//nolint:gosec // G201: table/column names are config-driven, not user input
 	query := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s IN (%s)",
-		r.keyColumn, r.valueColumn, r.tableName, r.keyColumn, strings.Join(placeholders, ","))
+			r.keyColumn, r.valueColumn, r.tableName, r.keyColumn, strings.Join(placeholders, ","))
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("postgresql repository get all: %w", err)
@@ -84,11 +88,11 @@ func (r *DefaultRepository) GetAll(ctx context.Context, keys []string) (map[stri
 
 	result := make(map[string]string, len(keys))
 	for rows.Next() {
-		var key, value string
-		if err := rows.Scan(&key, &value); err != nil {
+		var rowKey, rowValue string
+		if scanErr := rows.Scan(&rowKey, &rowValue); scanErr != nil {
 			continue
 		}
-		result[key] = value
+		result[rowKey] = rowValue
 	}
 	return result, rows.Err()
 }
@@ -99,7 +103,7 @@ type Config struct {
 	// must be provided via the DB/Table/KeyColumn/ValueColumn fields.
 	Repository Repository
 
-	// DB is an existing *sql.DB connection. Users manage the lifecycle
+	// DB is an existing [*sql.DB] connection. Users manage the lifecycle
 	// (open, close, connection pooling) themselves.
 	// Only used when Repository is nil.
 	DB *sql.DB
@@ -128,7 +132,7 @@ type Provider struct {
 }
 
 // New creates a new PostgreSQL provider.
-// Pass a Config with either a custom Repository or a pre-configured *sql.DB.
+// Pass a Config with either a custom Repository or a pre-configured [*sql.DB].
 //
 // Using the default repository:
 //
@@ -150,7 +154,7 @@ func New(cfg Config) (*Provider, error) {
 	repo := cfg.Repository
 	if repo == nil {
 		if cfg.DB == nil {
-			return nil, fmt.Errorf("postgresql provider: either Repository or DB must be provided")
+			return nil, errors.New("postgresql provider: either Repository or DB must be provided")
 		}
 		tableName := cfg.TableName
 		if tableName == "" {
@@ -169,7 +173,7 @@ func New(cfg Config) (*Provider, error) {
 
 	pollInterval := cfg.PollInterval
 	if pollInterval == 0 {
-		pollInterval = 5 * time.Second
+		pollInterval = 5 * time.Second //nolint:mnd // default poll interval
 	}
 
 	return &Provider{
@@ -198,21 +202,19 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 
 	// Initial fetch
 	vals, _ := p.repo.GetAll(ctx, keys)
-	for k, v := range vals {
-		lastValues[k] = v
-	}
+	maps.Copy(lastValues, vals)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			vals, err := p.repo.GetAll(ctx, keys)
+			pollVals, err := p.repo.GetAll(ctx, keys)
 			if err != nil {
 				continue
 			}
 			for _, key := range keys {
-				newVal := vals[key]
+				newVal := pollVals[key]
 				if newVal != lastValues[key] {
 					lastValues[key] = newVal
 					onChange(key, newVal)
@@ -223,7 +225,7 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 }
 
 // Close releases PostgreSQL provider resources.
-// Note: the *sql.DB is managed by the caller and is not closed here.
+// Note: the [*sql.DB] is managed by the caller and is not closed here.
 func (p *Provider) Close() error {
 	return nil
 }

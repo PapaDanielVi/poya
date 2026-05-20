@@ -28,11 +28,11 @@ func NewDcValue[T any](defaultValue T) *DcValue[T] {
 		defaultValue: defaultValue,
 	}
 	d.val.Store(defaultValue)
-	k := reflect.TypeOf(defaultValue).Kind()
-	switch {
-	case k == reflect.Struct:
+	//nolint:exhaustive // reflect.Kind is not an enum; default handles all other kinds
+	switch reflect.TypeOf(defaultValue).Kind() {
+	case reflect.Struct:
 		d.kind = entryKindStruct
-	case k == reflect.Slice:
+	case reflect.Slice:
 		d.kind = entryKindArray
 	default:
 		d.kind = entryKindScalar
@@ -47,20 +47,20 @@ func (d *DcValue[T]) Get() T {
 }
 
 // InternalKey sets the provider key. Called by the SDK during registration.
-//nolint:unused
+
 func (d *DcValue[T]) InternalKey(key string) {
 	d.key = key
 }
 
 // InternalSet updates the current value. Called by the SDK sync loop.
-//nolint:unused
+
 func (d *DcValue[T]) InternalSet(val T) {
 	d.val.Store(val)
 }
 
 // InternalSetJSON unmarshals raw JSON into T and stores it.
 // Called by the SDK sync loop when T is a struct or array type.
-//nolint:unused
+
 func (d *DcValue[T]) InternalSetJSON(raw []byte) error {
 	rv := reflect.New(reflect.TypeOf(d.defaultValue))
 	if err := json.Unmarshal(raw, rv.Interface()); err != nil {
@@ -71,19 +71,19 @@ func (d *DcValue[T]) InternalSetJSON(raw []byte) error {
 }
 
 // InternalDefault returns the default value. Called by the SDK.
-//nolint:unused
+
 func (d *DcValue[T]) InternalDefault() T {
 	return d.defaultValue
 }
 
 // InternalAtomic returns the underlying atomic.Value. Called by the SDK.
-//nolint:unused
+
 func (d *DcValue[T]) InternalAtomic() *atomic.Value {
 	return &d.val
 }
 
 // InternalKind returns the entry kind (scalar, struct, or array). Called by the SDK.
-//nolint:unused
+
 func (d *DcValue[T]) InternalKind() entryKind {
 	return d.kind
 }
@@ -95,11 +95,11 @@ func (d *DcValue[T]) InternalKind() entryKind {
 func (d *DcValue[T]) SetDefaultAndValue(val T) {
 	d.defaultValue = val
 	d.val.Store(val)
-	k := reflect.TypeOf(val).Kind()
-	switch {
-	case k == reflect.Struct:
+	//nolint:exhaustive // reflect.Kind is not an enum; default handles all other kinds
+	switch reflect.TypeOf(val).Kind() {
+	case reflect.Struct:
 		d.kind = entryKindStruct
-	case k == reflect.Slice:
+	case reflect.Slice:
 		d.kind = entryKindArray
 	default:
 		d.kind = entryKindScalar

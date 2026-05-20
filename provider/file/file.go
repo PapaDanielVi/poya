@@ -1,4 +1,4 @@
-// Package file implements the provider.Provider interface for local file-based configuration.
+// Package file implements provider.Provider for local file-based configuration.
 // It watches a file for changes using fsnotify (fsevents on macOS, inotify on Linux)
 // and re-reads the file on every change, calling compare-and-swap on dynamic values.
 // Supports JSON and YAML flat key:value formats (not nested).
@@ -7,6 +7,7 @@ package file
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -53,7 +54,7 @@ type Provider struct {
 // New creates a new file provider that watches the given file.
 func New(cfg Config) (*Provider, error) {
 	if cfg.Path == "" {
-		return nil, fmt.Errorf("file provider: path is required")
+		return nil, errors.New("file provider: path is required")
 	}
 
 	format := cfg.Format
@@ -83,7 +84,7 @@ func New(cfg Config) (*Provider, error) {
 }
 
 // Get retrieves the current value for a key from the file.
-func (p *Provider) Get(ctx context.Context, key string) (string, error) {
+func (p *Provider) Get(_ context.Context, key string) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.values[key], nil
@@ -98,14 +99,14 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 	}
 	defer watcher.Close()
 
-	if err := watcher.Add(p.path); err != nil {
-		return fmt.Errorf("file provider: failed to watch file: %w", err)
+	if addErr := watcher.Add(p.path); addErr != nil {
+		return fmt.Errorf("file provider: failed to watch file: %w", addErr)
 	}
 
 	// Also watch the directory to handle file renames/recreates (common with atomic writes).
 	dir := filepath.Dir(p.path)
-	if err := watcher.Add(dir); err != nil {
-		return fmt.Errorf("file provider: failed to watch directory: %w", err)
+	if addErr := watcher.Add(dir); addErr != nil {
+		return fmt.Errorf("file provider: failed to watch directory: %w", addErr)
 	}
 
 	for {
@@ -122,15 +123,15 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 			}
 			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) {
 				// Small delay to let the writer finish.
-				time.Sleep(50 * time.Millisecond)
+				time.Sleep(50 * time.Millisecond) //nolint:mnd // delay for atomic write completion
 				p.detectChanges(keys, onChange)
 			}
-		case err, ok := <-watcher.Errors:
+		case watchErr, ok := <-watcher.Errors:
 			if !ok {
 				return nil
 			}
 			// Silently continue on watch errors; the file may be temporarily unavailable.
-			_ = err
+			_ = watchErr
 		}
 	}
 }
@@ -157,16 +158,18 @@ func (p *Provider) load() error {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
 
-	var raw map[string]interface{}
+	var raw map[string]any
 	switch p.format {
 	case FormatJSON:
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return fmt.Errorf("failed to parse JSON: %w", err)
+		if jsonErr := json.Unmarshal(data, &raw); jsonErr != nil {
+			return fmt.Errorf("failed to parse JSON: %w", jsonErr)
 		}
 	case FormatYAML:
-		if err := yaml.Unmarshal(data, &raw); err != nil {
-			return fmt.Errorf("failed to parse YAML: %w", err)
+		if yamlErr := yaml.Unmarshal(data, &raw); yamlErr != nil {
+			return fmt.Errorf("failed to parse YAML: %w", yamlErr)
 		}
+	case FormatAuto:
+		return errors.New("format should have been resolved before load")
 	default:
 		return fmt.Errorf("unknown format: %v", p.format)
 	}

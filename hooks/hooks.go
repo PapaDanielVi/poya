@@ -1,5 +1,5 @@
 // Package hooks provides mapstructure decode hooks for use with DcValue[T]
-// fields. When decoding YAML or map[string]interface{} data into structs
+// fields. When decoding YAML or map[string]any data into structs
 // containing DcValue[T] fields, use MapstructureHookFunc() so that
 // mapstructure automatically constructs properly-typed DcValue instances.
 package hooks
@@ -20,7 +20,7 @@ import (
 //
 // For scalar T types (string, int, bool, etc.), the source value is set
 // directly. For struct T types, the source value (typically
-// map[string]interface{} from YAML decoding) is JSON-marshaled and then
+// map[string]any from YAML decoding) is JSON-marshaled and then
 // set via InternalSetJSON.
 //
 // Usage:
@@ -32,9 +32,7 @@ import (
 //	if err != nil { ... }
 //	err = decoder.Decode(viper.AllSettings())
 func MapstructureHookFunc() mapstructure.DecodeHookFunc {
-	return mapstructure.DecodeHookFuncValue(func(from reflect.Value, to reflect.Value) (interface{}, error) {
-		return hookFunc(from, to)
-	})
+	return mapstructure.DecodeHookFuncValue(hookFunc)
 }
 
 // MapstructureHookFuncValue returns a mapstructure.DecodeHookFuncValue for
@@ -43,7 +41,7 @@ func MapstructureHookFuncValue() mapstructure.DecodeHookFuncValue {
 	return hookFunc
 }
 
-func hookFunc(from reflect.Value, to reflect.Value) (interface{}, error) {
+func hookFunc(from reflect.Value, to reflect.Value) (any, error) {
 	toType := to.Type()
 
 	// mapstructure may call us with *DcValue[T] (pointer) or DcValue[T]
@@ -69,7 +67,7 @@ func hookFunc(from reflect.Value, to reflect.Value) (interface{}, error) {
 
 	// Extract T from the defaultValue field (index 1).
 	// DcValue[T] fields: [0]=key string, [1]=defaultValue T, [2]=val atomic.Value, [3]=kind entryKind.
-	if elemType.NumField() < 4 {
+	if elemType.NumField() < 4 { //nolint:mnd // DcValue has 4 fields
 		return from.Interface(), nil
 	}
 	tType := elemType.Field(1).Type
@@ -97,7 +95,7 @@ func hookFunc(from reflect.Value, to reflect.Value) (interface{}, error) {
 	return result.Interface(), nil
 }
 
-func handleStructDcValue(elemType, tType reflect.Type, data interface{}) (interface{}, error) {
+func handleStructDcValue(elemType, tType reflect.Type, data any) (any, error) {
 	jsonBytes, err := json.Marshal(data)
 	if err != nil {
 		return nil, fmt.Errorf("hooks: failed to marshal struct data for %s: %w", elemType, err)
@@ -116,7 +114,10 @@ func handleStructDcValue(elemType, tType reflect.Type, data interface{}) (interf
 	}
 	errs := setJSONMethod.Call([]reflect.Value{reflect.ValueOf(jsonBytes)})
 	if !errs[0].IsNil() {
-		return nil, fmt.Errorf("hooks: InternalSetJSON failed: %w", errs[0].Interface().(error))
+			if jsonErr, ok := errs[0].Interface().(error); ok {
+				return nil, fmt.Errorf("hooks: InternalSetJSON failed: %w", jsonErr)
+			}
+			return nil, fmt.Errorf("hooks: InternalSetJSON failed: %v", errs[0].Interface())
 	}
 
 	return result.Interface(), nil

@@ -28,7 +28,7 @@ type Provider struct {
 // New creates a new etcd provider connected to the given endpoints.
 func New(cfg Config) (*Provider, error) {
 	if cfg.DialTimeout == 0 {
-		cfg.DialTimeout = 5 * time.Second
+		cfg.DialTimeout = 5 * time.Second //nolint:mnd // default dial timeout
 	}
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   cfg.Endpoints,
@@ -67,7 +67,7 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 	}
 	// Ensure prefix ends with "/" for proper range watching
 	if !strings.HasSuffix(prefix, "/") {
-		prefix = prefix + "/"
+		prefix += "/"
 	}
 
 	watchCh := p.client.Watch(ctx, prefix, clientv3.WithPrefix())

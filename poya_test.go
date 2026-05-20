@@ -1,3 +1,4 @@
+//nolint:testpackage // tests access unexported methods (InternalKind, InternalSet, etc.)
 package poya
 
 import (
@@ -57,6 +58,7 @@ func (m *mockProvider) set(key, value string) {
 }
 
 func TestNewSDK(t *testing.T) {
+	t.Parallel()
 	p := newMockProvider()
 	sdk := New(Config{Provider: p, Prefix: "test/"})
 	if sdk == nil {
@@ -65,6 +67,7 @@ func TestNewSDK(t *testing.T) {
 }
 
 func TestNewSDKWithMetrics(t *testing.T) {
+	t.Parallel()
 	p := newMockProvider()
 	sdk := New(Config{Provider: p, Prefix: "test/", EnableMetrics: true})
 	if sdk == nil {
@@ -76,6 +79,7 @@ func TestNewSDKWithMetrics(t *testing.T) {
 }
 
 func TestNewSDKWithoutMetrics(t *testing.T) {
+	t.Parallel()
 	p := newMockProvider()
 	sdk := New(Config{Provider: p})
 	if _, ok := sdk.metrics.(metrics.NoopMetrics); !ok {
@@ -84,6 +88,7 @@ func TestNewSDKWithoutMetrics(t *testing.T) {
 }
 
 func TestNewSDKWithCustomMetrics(t *testing.T) {
+	t.Parallel()
 	p := newMockProvider()
 	fm := &fakeMetrics{}
 	sdk := New(Config{Provider: p, Metrics: fm})
@@ -93,6 +98,7 @@ func TestNewSDKWithCustomMetrics(t *testing.T) {
 }
 
 func TestRegisterAndGet(t *testing.T) {
+	t.Parallel()
 	p := newMockProvider()
 	p.set("test/mykey", "hello")
 
@@ -106,6 +112,7 @@ func TestRegisterAndGet(t *testing.T) {
 }
 
 func TestRegisterConfigScalar(t *testing.T) {
+	t.Parallel()
 	type AppConfig struct {
 		DBHost  DcValue[string] `poya:"key=db_host"`
 		DBPort  DcValue[int]    `poya:"key=db_port"`
@@ -138,6 +145,7 @@ func TestRegisterConfigScalar(t *testing.T) {
 }
 
 func TestRegisterConfigNested(t *testing.T) {
+	t.Parallel()
 	type DBConfig struct {
 		Host DcValue[string] `poya:"key=host"`
 		Port DcValue[int]    `poya:"key=port"`
@@ -170,6 +178,7 @@ func TestRegisterConfigNested(t *testing.T) {
 }
 
 func TestRegisterConfigNoTag(t *testing.T) {
+	t.Parallel()
 	type AppConfig struct {
 		MyKey DcValue[string]
 	}
@@ -192,6 +201,7 @@ func TestRegisterConfigNoTag(t *testing.T) {
 }
 
 func TestRegisterConfigStruct(t *testing.T) {
+	t.Parallel()
 	type DBConfig struct {
 		Host string `json:"host"`
 		Port int    `json:"port"`
@@ -216,6 +226,7 @@ func TestRegisterConfigStruct(t *testing.T) {
 }
 
 func TestRegisterConfigMixed(t *testing.T) {
+	t.Parallel()
 	type DBDetails struct {
 		Host string `json:"host"`
 		Port int    `json:"port"`
@@ -256,6 +267,7 @@ func TestRegisterConfigMixed(t *testing.T) {
 }
 
 func TestStartUpdatesScalarValue(t *testing.T) {
+	t.Parallel()
 	p := newMockProvider()
 	p.set("test/key", "initial")
 
@@ -297,6 +309,7 @@ func TestStartUpdatesScalarValue(t *testing.T) {
 }
 
 func TestStartUpdatesStructValue(t *testing.T) {
+	t.Parallel()
 	type DBConfig struct {
 		Host string `json:"host"`
 		Port int    `json:"port"`
@@ -343,6 +356,7 @@ func TestStartUpdatesStructValue(t *testing.T) {
 }
 
 func TestStartUpdatesArrayValue(t *testing.T) {
+	t.Parallel()
 	p := newMockProvider()
 
 	updateCh := make(chan struct{}, 1)
@@ -385,6 +399,7 @@ func TestStartUpdatesArrayValue(t *testing.T) {
 }
 
 func TestStartUpdatesArrayStringValue(t *testing.T) {
+	t.Parallel()
 	p := newMockProvider()
 
 	updateCh := make(chan struct{}, 1)
@@ -427,6 +442,7 @@ func TestStartUpdatesArrayStringValue(t *testing.T) {
 }
 
 func TestRegisterConfigArray(t *testing.T) {
+	t.Parallel()
 	p := newMockProvider()
 	sdk := New(Config{Provider: p, Prefix: "myapp/"})
 
@@ -446,6 +462,7 @@ func TestRegisterConfigArray(t *testing.T) {
 }
 
 func TestCustomMetricsReceiveEvents(t *testing.T) {
+	t.Parallel()
 	type DBConfig struct {
 		Host string `json:"host"`
 		Port int    `json:"port"`
@@ -494,6 +511,7 @@ func TestCustomMetricsReceiveEvents(t *testing.T) {
 }
 
 func TestParseValue(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		raw  string
 		def  any
@@ -534,6 +552,7 @@ func TestParseValue(t *testing.T) {
 }
 
 func TestParsePoyaTag(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		raw  string
 		want poyaTag
@@ -555,6 +574,7 @@ func TestParsePoyaTag(t *testing.T) {
 }
 
 func TestSDKWithNoPrefix(t *testing.T) {
+	t.Parallel()
 	p := newMockProvider()
 	sdk := New(Config{Provider: p})
 
@@ -570,6 +590,7 @@ func TestSDKWithNoPrefix(t *testing.T) {
 }
 
 func TestSDKStopCancelsWatchers(t *testing.T) {
+	t.Parallel()
 	p := newMockProvider()
 	watchStopped := make(chan struct{}, 1)
 
@@ -593,7 +614,8 @@ func TestSDKStopCancelsWatchers(t *testing.T) {
 	}
 }
 
-func TestNoopMetrics(_ *testing.T) {
+func TestNoopMetrics(t *testing.T) {
+	t.Parallel()
 	m := metrics.NoopMetrics{}
 	m.IncWatchEvents("key")
 	m.IncWatchErrors("key")

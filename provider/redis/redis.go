@@ -31,7 +31,7 @@ type Provider struct {
 // New creates a new Redis provider connected to the given address.
 func New(cfg Config) *Provider {
 	if cfg.PollInterval == 0 {
-		cfg.PollInterval = 5 * time.Second
+		cfg.PollInterval = 5 * time.Second //nolint:mnd // default poll interval
 	}
 	return &Provider{
 		client: goredis.NewClient(&goredis.Options{
@@ -76,11 +76,11 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			vals, err := p.client.MGet(ctx, keys...).Result()
+			pollVals, err := p.client.MGet(ctx, keys...).Result()
 			if err != nil {
 				continue
 			}
-			for i, v := range vals {
+			for i, v := range pollVals {
 				key := keys[i]
 				newVal := ""
 				if v != nil {

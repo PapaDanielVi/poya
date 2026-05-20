@@ -33,7 +33,7 @@ type Provider struct {
 // New creates a new Vault provider connected to the given address.
 func New(cfg Config) (*Provider, error) {
 	if cfg.PollInterval == 0 {
-		cfg.PollInterval = 10 * time.Second
+		cfg.PollInterval = 10 * time.Second //nolint:mnd // default poll interval
 	}
 	if cfg.MountPath == "" {
 		cfg.MountPath = "secret"

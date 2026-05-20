@@ -31,8 +31,7 @@ func parsePoyaTag(raw string) poyaTag {
 		return poyaTag{}
 	}
 	var pt poyaTag
-	parts := strings.Split(raw, ",")
-	for _, part := range parts {
+	for part := range strings.SplitSeq(raw, ",") {
 		part = strings.TrimSpace(part)
 		if strings.HasPrefix(part, "key=") {
 			pt.key = strings.TrimPrefix(part, "key=")
@@ -123,7 +122,7 @@ func Register[T any](s *SDK, key string, val *DcValue[T]) {
 	s.log.Debug("registered config value", "key", fullKey, "kind", val.InternalKind())
 }
 
-func RegisterConfig(s *SDK, structVal interface{}) {
+func RegisterConfig(s *SDK, structVal any) {
 	v := reflect.ValueOf(structVal)
 	if v.Kind() != reflect.Pointer {
 		panic("RegisterConfig requires a pointer to a struct")
@@ -261,12 +260,12 @@ func (s *SDK) Stop() {
 
 func updateEntry(e *entry, raw string) {
 	switch e.kind {
+	case entryKindScalar:
+		updateScalarEntry(e, raw)
 	case entryKindStruct:
 		updateStructEntry(e, raw)
 	case entryKindArray:
 		updateArrayEntry(e, raw)
-	default:
-		updateScalarEntry(e, raw)
 	}
 }
 
@@ -305,15 +304,15 @@ func parseValue(raw string, def any) (any, error) {
 	case int8:
 		var i int64
 		_, err := fmt.Sscanf(raw, "%d", &i)
-		return int8(i), err
+		return int8(i), err //nolint:gosec // G115: intentional truncation
 	case int16:
 		var i int64
 		_, err := fmt.Sscanf(raw, "%d", &i)
-		return int16(i), err
+		return int16(i), err //nolint:gosec // G115: intentional truncation
 	case int32:
 		var i int64
 		_, err := fmt.Sscanf(raw, "%d", &i)
-		return int32(i), err
+		return int32(i), err //nolint:gosec // G115: intentional truncation
 	case int64:
 		var i int64
 		_, err := fmt.Sscanf(raw, "%d", &i)
@@ -325,15 +324,15 @@ func parseValue(raw string, def any) (any, error) {
 	case uint8:
 		var u uint64
 		_, err := fmt.Sscanf(raw, "%d", &u)
-		return uint8(u), err
+		return uint8(u), err //nolint:gosec // G115: intentional truncation
 	case uint16:
 		var u uint64
 		_, err := fmt.Sscanf(raw, "%d", &u)
-		return uint16(u), err
+		return uint16(u), err //nolint:gosec // G115: intentional truncation
 	case uint32:
 		var u uint64
 		_, err := fmt.Sscanf(raw, "%d", &u)
-		return uint32(u), err
+		return uint32(u), err //nolint:gosec // G115: intentional truncation
 	case uint64:
 		var u uint64
 		_, err := fmt.Sscanf(raw, "%d", &u)

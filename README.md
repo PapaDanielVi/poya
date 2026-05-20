@@ -1,4 +1,6 @@
-# poya
+<img src="docs/icon.png" alt="poay" style="border-radius: 50%; width: 300px; height: 300px; object-fit: cover;"/>
+
+# Poya
 
 [![CI](https://github.com/PapaDanielVi/poya/actions/workflows/ci.yml/badge.svg)](https://github.com/PapaDanielVi/poya/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/report/github.com/PapaDanielVi/poya)](https://goreportcard.com/report/github.com/PapaDanielVi/poya)
@@ -86,14 +88,14 @@ func main() {
 
 Runnable examples for every provider live in the [`examples/`](examples/) directory. Each example includes setup instructions (Docker commands to start the backend, seed data) and demonstrates both individual `Register` and struct-based `RegisterConfig` patterns.
 
-| Example | Provider | Watch Strategy | File |
-| ------- | -------- | -------------- | ---- |
-| etcd    | etcd     | Single prefix watch (event-driven) | [`examples/etcd/main.go`](examples/etcd/main.go) |
-| Redis   | Redis    | Batch `MGET` polling | [`examples/redis/main.go`](examples/redis/main.go) |
-| Vault   | HashiCorp Vault | Sequential poll (KV v2) | [`examples/vault/main.go`](examples/vault/main.go) |
-| MySQL   | MySQL    | Batch `SELECT ... WHERE IN` polling | [`examples/mysql/main.go`](examples/mysql/main.go) |
-| PostgreSQL | PostgreSQL | Batch `SELECT ... WHERE IN ($N)` polling | [`examples/postgresql/main.go`](examples/postgresql/main.go) |
-| File    | Local file | fsnotify / fsevents (JSON + YAML) | [`examples/file/main.go`](examples/file/main.go) |
+| Example    | Provider        | Watch Strategy                           | File                                                         |
+| ---------- | --------------- | ---------------------------------------- | ------------------------------------------------------------ |
+| etcd       | etcd            | Single prefix watch (event-driven)       | [`examples/etcd/main.go`](examples/etcd/main.go)             |
+| Redis      | Redis           | Batch `MGET` polling                     | [`examples/redis/main.go`](examples/redis/main.go)           |
+| Vault      | HashiCorp Vault | Sequential poll (KV v2)                  | [`examples/vault/main.go`](examples/vault/main.go)           |
+| MySQL      | MySQL           | Batch `SELECT ... WHERE IN` polling      | [`examples/mysql/main.go`](examples/mysql/main.go)           |
+| PostgreSQL | PostgreSQL      | Batch `SELECT ... WHERE IN ($N)` polling | [`examples/postgresql/main.go`](examples/postgresql/main.go) |
+| File       | Local file      | fsnotify / fsevents (JSON + YAML)        | [`examples/file/main.go`](examples/file/main.go)             |
 
 **Running an example:**
 

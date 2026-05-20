@@ -14,23 +14,33 @@
 package main
 
 import (
-	"fmt"
-	"log"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/PapaDanielVi/poya"
 	"github.com/PapaDanielVi/poya/provider/vault"
 )
 
+const (
+	pollInterval    = 10 * time.Second
+	displayInterval = 5 * time.Second
+	defaultDBPort   = 5432
+	defaultDBHost   = "localhost"
+)
+
 func main() {
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
 	provider, err := vault.New(vault.Config{
 		Address:      "http://localhost:8200",
 		Token:        "root",
 		MountPath:    "secret",
-		PollInterval: 10 * time.Second,
+		PollInterval: pollInterval,
 	})
 	if err != nil {
-		log.Fatal(err)
+		log.Error("failed to create vault provider", "error", err)
+		os.Exit(1)
 	}
 
 	sdk := poya.New(poya.Config{
@@ -48,18 +58,21 @@ func main() {
 		Port poya.DcValue[int]    `poya:"key=port"`
 	}
 	cfg := DBConfig{
-		Host: *poya.NewDcValue("localhost"),
-		Port: *poya.NewDcValue(5432),
+		Host: *poya.NewDcValue(defaultDBHost),
+		Port: *poya.NewDcValue(defaultDBPort),
 	}
 	poya.RegisterConfig(sdk, &cfg)
 
 	sdk.Start()
 	defer sdk.Stop()
 
-	fmt.Println("Polling Vault every 10s — update secrets to see changes reflected.")
+	log.Info("Polling Vault every 10s — update secrets to see changes reflected.")
 	for {
-		fmt.Printf("  timeout=%s  verbose=%v  db.host=%s  db.port=%d\n",
-			timeout.Get(), verbose.Get(), cfg.Host.Get(), cfg.Port.Get())
-		time.Sleep(5 * time.Second)
+		log.Info("current config",
+			"timeout", timeout.Get(),
+			"verbose", verbose.Get(),
+			"db.host", cfg.Host.Get(),
+			"db.port", cfg.Port.Get())
+		time.Sleep(displayInterval)
 	}
 }

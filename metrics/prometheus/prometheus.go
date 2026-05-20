@@ -8,6 +8,11 @@ import (
 	"github.com/PapaDanielVi/poya/metrics"
 )
 
+const (
+	metricsNamespace = "poya"
+	metricsKeyLabel  = "key"
+)
+
 // RealMetrics emits Prometheus metrics using a dedicated registry
 // to avoid duplicate registration panics across multiple SDK instances.
 type RealMetrics struct {
@@ -22,26 +27,26 @@ func New() *RealMetrics {
 	reg := prometheus.NewRegistry()
 	m := &RealMetrics{
 		watchEvents: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "poya",
+			Namespace: metricsNamespace,
 			Subsystem: "watch",
 			Name:      "events_total",
 			Help:      "Total number of watch events received from providers",
-		}, []string{"key"}),
+		}, []string{metricsKeyLabel}),
 		watchErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "poya",
+			Namespace: metricsNamespace,
 			Subsystem: "watch",
 			Name:      "errors_total",
 			Help:      "Total number of watch errors from providers",
-		}, []string{"key"}),
+		}, []string{metricsKeyLabel}),
 		updateLatency: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: "poya",
+			Namespace: metricsNamespace,
 			Subsystem: "sync",
 			Name:      "update_latency_seconds",
 			Help:      "Latency of value updates from provider event to atomic store",
 			Buckets:   prometheus.DefBuckets,
-		}, []string{"key"}),
+		}, []string{metricsKeyLabel}),
 		registeredKeys: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: "poya",
+			Namespace: metricsNamespace,
 			Name:      "registered_keys",
 			Help:      "Number of registered config keys currently being watched",
 		}),

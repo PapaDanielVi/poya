@@ -13,17 +13,27 @@
 package main
 
 import (
-	"fmt"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/PapaDanielVi/poya"
 	"github.com/PapaDanielVi/poya/provider/redis"
 )
 
+const (
+	pollInterval     = 5 * time.Second
+	defaultDBPort    = 5432
+	defaultDBHost    = "localhost"
+	defaultDBVerbose = false
+)
+
 func main() {
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
 	provider := redis.New(redis.Config{
 		Addr:         "localhost:6379",
-		PollInterval: 5 * time.Second,
+		PollInterval: pollInterval,
 	})
 	defer provider.Close()
 
@@ -33,7 +43,7 @@ func main() {
 	})
 
 	timeout := poya.NewDcValue("30s")
-	verbose := poya.NewDcValue(false)
+	verbose := poya.NewDcValue(defaultDBVerbose)
 	poya.Register(sdk, "timeout", timeout)
 	poya.Register(sdk, "verbose", verbose)
 
@@ -42,18 +52,21 @@ func main() {
 		Port poya.DcValue[int]    `poya:"key=port"`
 	}
 	cfg := DBConfig{
-		Host: *poya.NewDcValue("localhost"),
-		Port: *poya.NewDcValue(5432),
+		Host: *poya.NewDcValue(defaultDBHost),
+		Port: *poya.NewDcValue(defaultDBPort),
 	}
 	poya.RegisterConfig(sdk, &cfg)
 
 	sdk.Start()
 	defer sdk.Stop()
 
-	fmt.Println("Polling Redis every 5s — change values with redis-cli to see updates.")
+	log.Info("Polling Redis every 5s — change values with redis-cli to see updates.")
 	for {
-		fmt.Printf("  timeout=%s  verbose=%v  db.host=%s  db.port=%d\n",
-			timeout.Get(), verbose.Get(), cfg.Host.Get(), cfg.Port.Get())
-		time.Sleep(5 * time.Second)
+		log.Info("current config",
+			"timeout", timeout.Get(),
+			"verbose", verbose.Get(),
+			"db.host", cfg.Host.Get(),
+			"db.port", cfg.Port.Get())
+		time.Sleep(pollInterval)
 	}
 }
