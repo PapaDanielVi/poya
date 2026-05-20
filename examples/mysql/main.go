@@ -46,7 +46,7 @@ func main() {
 		log.Error("failed to open mysql connection", "error", err)
 		os.Exit(1)
 	}
-	defer db.Close()
+	defer db.Close() //nolint:errcheck,nolintlint
 
 	provider, err := mysql.New(mysql.Config{
 		DB:           db,

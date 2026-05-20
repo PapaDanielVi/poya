@@ -33,10 +33,12 @@ func parsePoyaTag(raw string) poyaTag {
 	var pt poyaTag
 	for part := range strings.SplitSeq(raw, ",") {
 		part = strings.TrimSpace(part)
-		if strings.HasPrefix(part, "key=") {
-			pt.key = strings.TrimPrefix(part, "key=")
-		} else if strings.HasPrefix(part, "prefix=") {
-			pt.prefix = strings.TrimPrefix(part, "prefix=")
+		if after, found := strings.CutPrefix(part, "key="); found {
+			pt.key = after
+			continue
+		}
+		if after, found := strings.CutPrefix(part, "prefix="); found {
+			pt.prefix = after
 		}
 	}
 	return pt
@@ -66,15 +68,15 @@ type entry struct {
 	key        string
 	defaultVal any
 	atomic     *atomic.Value
-	kind       entryKind
+	kind       EntryKind
 }
 
-type entryKind int
+type EntryKind int
 
 const (
-	entryKindScalar entryKind = iota
-	entryKindStruct
-	entryKindArray
+	EntryKindScalar EntryKind = iota
+	EntryKindStruct
+	EntryKindArray
 )
 
 func New(cfg Config) *SDK {
@@ -84,11 +86,12 @@ func New(cfg Config) *SDK {
 		prefix = strings.TrimSuffix(prefix, "/") + "/"
 	}
 	var m metrics.Metrics
-	if cfg.Metrics != nil {
+	switch {
+	case cfg.Metrics != nil:
 		m = cfg.Metrics
-	} else if cfg.EnableMetrics {
+	case cfg.EnableMetrics:
 		m = prom.New()
-	} else {
+	default:
 		m = metrics.NoopMetrics{}
 	}
 	l := cfg.Logger
@@ -139,7 +142,7 @@ func registerConfig(s *SDK, v reflect.Value, parentPrefix string) {
 	}
 
 	t := v.Type()
-	for i := 0; i < t.NumField(); i++ {
+	for i := range t.NumField() {
 		sf := t.Field(i)
 		fv := v.Field(i)
 
@@ -160,16 +163,21 @@ func registerConfig(s *SDK, v reflect.Value, parentPrefix string) {
 		}
 
 		if fv.Kind() == reflect.Struct || (fv.Kind() == reflect.Pointer && fv.Elem().Kind() == reflect.Struct) {
-			nestedPrefix := parentPrefix
-			if tag.prefix != "" {
-				nestedPrefix = parentPrefix + tag.prefix + "/"
-			}
-			if tag.key != "" {
-				nestedPrefix = parentPrefix + tag.key + "/"
-			}
+			nestedPrefix := calcNestedPrefix(parentPrefix, tag)
 			registerConfig(s, fv, nestedPrefix)
 		}
 	}
+}
+
+func calcNestedPrefix(parent string, tag poyaTag) string {
+	prefix := parent
+	if tag.prefix != "" {
+		prefix = parent + tag.prefix + "/"
+	}
+	if tag.key != "" {
+		prefix = parent + tag.key + "/"
+	}
+	return prefix
 }
 
 func isDcValue(v reflect.Value) bool {
@@ -202,8 +210,16 @@ func handleDcValue(s *SDK, fv reflect.Value, fullKey string) {
 
 	setKey.Call([]reflect.Value{reflect.ValueOf(fullKey)})
 	defVal := getDef.Call(nil)[0].Interface()
-	atomicPtr := getAtomic.Call(nil)[0].Interface().(*atomic.Value)
-	kindVal := getKind.Call(nil)[0].Interface().(entryKind)
+	atomicVal := getAtomic.Call(nil)[0].Interface()
+	atomicPtr, ok := atomicVal.(*atomic.Value)
+	if !ok {
+		panic("InternalAtomic must return *atomic.Value")
+	}
+	kindValI := getKind.Call(nil)[0].Interface()
+	kindVal, ok := kindValI.(EntryKind)
+	if !ok {
+		panic("InternalKind must return EntryKind")
+	}
 
 	s.mu.Lock()
 	s.values[fullKey] = &entry{
@@ -227,7 +243,7 @@ func (s *SDK) Start() {
 	}
 
 	s.wg.Add(1)
-	go func() {
+	go func() { //nolint:modernize // waitgroupgo: standard pattern is acceptable
 		defer s.wg.Done()
 		s.log.Debug("watcher started", "keys", len(keys))
 		err := s.provider.Watch(s.ctx, keys, func(changedKey string, rawValue string) {
@@ -260,11 +276,11 @@ func (s *SDK) Stop() {
 
 func updateEntry(e *entry, raw string) {
 	switch e.kind {
-	case entryKindScalar:
+	case EntryKindScalar:
 		updateScalarEntry(e, raw)
-	case entryKindStruct:
+	case EntryKindStruct:
 		updateStructEntry(e, raw)
-	case entryKindArray:
+	case EntryKindArray:
 		updateArrayEntry(e, raw)
 	}
 }
@@ -293,50 +309,50 @@ func updateArrayEntry(e *entry, raw string) {
 	e.atomic.Store(rv.Elem().Interface())
 }
 
+func parseSigned(raw string) (int64, error) {
+	var i int64
+	_, err := fmt.Sscanf(raw, "%d", &i)
+	return i, err
+}
+
+func parseUnsigned(raw string) (uint64, error) {
+	var u uint64
+	_, err := fmt.Sscanf(raw, "%d", &u)
+	return u, err
+}
+
 func parseValue(raw string, def any) (any, error) {
 	switch def.(type) {
 	case string:
 		return raw, nil
 	case int:
-		var i int
-		_, err := fmt.Sscanf(raw, "%d", &i)
-		return i, err
+		i, err := parseSigned(raw)
+		return int(i), err
 	case int8:
-		var i int64
-		_, err := fmt.Sscanf(raw, "%d", &i)
-		return int8(i), err //nolint:gosec // G115: intentional truncation
+		i, err := parseSigned(raw)
+		return int8(i), err //nolint:gosec,nolintlint
 	case int16:
-		var i int64
-		_, err := fmt.Sscanf(raw, "%d", &i)
-		return int16(i), err //nolint:gosec // G115: intentional truncation
+		i, err := parseSigned(raw)
+		return int16(i), err //nolint:gosec,nolintlint
 	case int32:
-		var i int64
-		_, err := fmt.Sscanf(raw, "%d", &i)
-		return int32(i), err //nolint:gosec // G115: intentional truncation
+		i, err := parseSigned(raw)
+		return int32(i), err //nolint:gosec,nolintlint
 	case int64:
-		var i int64
-		_, err := fmt.Sscanf(raw, "%d", &i)
-		return i, err
+		return parseSigned(raw)
 	case uint:
-		var u uint64
-		_, err := fmt.Sscanf(raw, "%d", &u)
+		u, err := parseUnsigned(raw)
 		return uint(u), err
 	case uint8:
-		var u uint64
-		_, err := fmt.Sscanf(raw, "%d", &u)
-		return uint8(u), err //nolint:gosec // G115: intentional truncation
+		u, err := parseUnsigned(raw)
+		return uint8(u), err //nolint:gosec,nolintlint
 	case uint16:
-		var u uint64
-		_, err := fmt.Sscanf(raw, "%d", &u)
-		return uint16(u), err //nolint:gosec // G115: intentional truncation
+		u, err := parseUnsigned(raw)
+		return uint16(u), err //nolint:gosec,nolintlint
 	case uint32:
-		var u uint64
-		_, err := fmt.Sscanf(raw, "%d", &u)
-		return uint32(u), err //nolint:gosec // G115: intentional truncation
+		u, err := parseUnsigned(raw)
+		return uint32(u), err //nolint:gosec,nolintlint
 	case uint64:
-		var u uint64
-		_, err := fmt.Sscanf(raw, "%d", &u)
-		return u, err
+		return parseUnsigned(raw)
 	case float32:
 		var f float64
 		_, err := fmt.Sscanf(raw, "%f", &f)

@@ -46,7 +46,7 @@ func main() {
 		log.Error("failed to open postgres connection", "error", err)
 		os.Exit(1)
 	}
-	defer db.Close()
+	defer db.Close() //nolint:errcheck,nolintlint
 
 	provider, err := postgresql.New(postgresql.Config{
 		DB:           db,

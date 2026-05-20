@@ -220,8 +220,8 @@ func TestRegisterConfigStruct(t *testing.T) {
 	if !ok {
 		t.Fatal("db struct not registered")
 	}
-	if e.kind != entryKindStruct {
-		t.Error("expected entryKindStruct for struct-typed DcValue")
+	if e.kind != EntryKindStruct {
+		t.Error("expected EntryKindStruct for struct-typed DcValue")
 	}
 }
 
@@ -253,16 +253,16 @@ func TestRegisterConfigMixed(t *testing.T) {
 	if !ok {
 		t.Fatal("timeout not registered")
 	}
-	if timeoutEntry.kind != entryKindScalar {
-		t.Error("expected entryKindScalar for DcValue[time.Duration]")
+	if timeoutEntry.kind != EntryKindScalar {
+		t.Error("expected EntryKindScalar for DcValue[time.Duration]")
 	}
 
 	dbEntry, ok := sdk.values["myapp/db_config"]
 	if !ok {
 		t.Fatal("db_config not registered")
 	}
-	if dbEntry.kind != entryKindStruct {
-		t.Error("expected entryKindStruct for DcValue[DBDetails]")
+	if dbEntry.kind != EntryKindStruct {
+		t.Error("expected EntryKindStruct for DcValue[DBDetails]")
 	}
 }
 
@@ -456,8 +456,8 @@ func TestRegisterConfigArray(t *testing.T) {
 	if !ok {
 		t.Fatal("tags array not registered")
 	}
-	if e.kind != entryKindArray {
-		t.Errorf("expected entryKindArray (%d), got %d", entryKindArray, e.kind)
+	if e.kind != EntryKindArray {
+		t.Errorf("expected EntryKindArray (%d), got %d", EntryKindArray, e.kind)
 	}
 }
 

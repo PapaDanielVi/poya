@@ -35,7 +35,7 @@ func main() {
 		Addr:         "localhost:6379",
 		PollInterval: pollInterval,
 	})
-	defer provider.Close()
+	defer provider.Close() //nolint:errcheck,nolintlint
 
 	sdk := poya.New(poya.Config{
 		Provider: provider,

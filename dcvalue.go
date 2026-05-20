@@ -18,7 +18,7 @@ type DcValue[T any] struct {
 	key          string
 	defaultValue T
 	val          atomic.Value
-	kind         entryKind
+	kind         EntryKind
 }
 
 // NewDcValue creates a new DcValue with the given default.
@@ -31,19 +31,20 @@ func NewDcValue[T any](defaultValue T) *DcValue[T] {
 	//nolint:exhaustive // reflect.Kind is not an enum; default handles all other kinds
 	switch reflect.TypeOf(defaultValue).Kind() {
 	case reflect.Struct:
-		d.kind = entryKindStruct
+		d.kind = EntryKindStruct
 	case reflect.Slice:
-		d.kind = entryKindArray
+		d.kind = EntryKindArray
 	default:
-		d.kind = entryKindScalar
+		d.kind = EntryKindScalar
 	}
 	return d
 }
 
 // Get returns the current value. This is the only method exposed to the developer.
-// Reads are lock-free via atomic.Value.
+// Reads are lock-free via [atomic.Value].
 func (d *DcValue[T]) Get() T {
-	return d.val.Load().(T)
+	v, _ := d.val.Load().(T)
+	return v
 }
 
 // InternalKey sets the provider key. Called by the SDK during registration.
@@ -84,7 +85,7 @@ func (d *DcValue[T]) InternalAtomic() *atomic.Value {
 
 // InternalKind returns the entry kind (scalar, struct, or array). Called by the SDK.
 
-func (d *DcValue[T]) InternalKind() entryKind {
+func (d *DcValue[T]) InternalKind() EntryKind {
 	return d.kind
 }
 
@@ -98,10 +99,10 @@ func (d *DcValue[T]) SetDefaultAndValue(val T) {
 	//nolint:exhaustive // reflect.Kind is not an enum; default handles all other kinds
 	switch reflect.TypeOf(val).Kind() {
 	case reflect.Struct:
-		d.kind = entryKindStruct
+		d.kind = EntryKindStruct
 	case reflect.Slice:
-		d.kind = entryKindArray
+		d.kind = EntryKindArray
 	default:
-		d.kind = entryKindScalar
+		d.kind = EntryKindScalar
 	}
 }

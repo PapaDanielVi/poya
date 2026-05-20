@@ -97,7 +97,7 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 	if err != nil {
 		return fmt.Errorf("file provider: failed to create watcher: %w", err)
 	}
-	defer watcher.Close()
+	defer watcher.Close() //nolint:errcheck,nolintlint
 
 	if addErr := watcher.Add(p.path); addErr != nil {
 		return fmt.Errorf("file provider: failed to watch file: %w", addErr)

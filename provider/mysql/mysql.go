@@ -84,7 +84,7 @@ func (r *DefaultRepository) GetAll(ctx context.Context, keys []string) (map[stri
 	if err != nil {
 		return nil, fmt.Errorf("mysql repository get all: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck,nolintlint
 
 	result := make(map[string]string, len(keys))
 	for rows.Next() {

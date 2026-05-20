@@ -40,7 +40,7 @@ func main() {
 		log.Error("failed to create etcd provider", "error", err)
 		os.Exit(1)
 	}
-	defer provider.Close()
+	defer provider.Close() //nolint:errcheck,nolintlint
 
 	sdk := poya.New(poya.Config{
 		Provider: provider,

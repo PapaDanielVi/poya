@@ -59,9 +59,20 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 	ticker := time.NewTicker(p.pollInterval)
 	defer ticker.Stop()
 
-	lastValues := make(map[string]string, len(keys))
+	lastValues := p.initialFetch(ctx, keys)
 
-	// Initial fetch: get all keys in one MGET call
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			p.pollOnce(ctx, keys, lastValues, onChange)
+		}
+	}
+}
+
+func (p *Provider) initialFetch(ctx context.Context, keys []string) map[string]string {
+	lastValues := make(map[string]string, len(keys))
 	vals, _ := p.client.MGet(ctx, keys...).Result()
 	for i, v := range vals {
 		if v != nil {
@@ -70,29 +81,25 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 			}
 		}
 	}
+	return lastValues
+}
 
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			pollVals, err := p.client.MGet(ctx, keys...).Result()
-			if err != nil {
-				continue
+func (p *Provider) pollOnce(ctx context.Context, keys []string, lastValues map[string]string, onChange func(key string, value string)) {
+	pollVals, err := p.client.MGet(ctx, keys...).Result()
+	if err != nil {
+		return
+	}
+	for i, v := range pollVals {
+		key := keys[i]
+		newVal := ""
+		if v != nil {
+			if s, ok := v.(string); ok {
+				newVal = s
 			}
-			for i, v := range pollVals {
-				key := keys[i]
-				newVal := ""
-				if v != nil {
-					if s, ok := v.(string); ok {
-						newVal = s
-					}
-				}
-				if newVal != lastValues[key] {
-					lastValues[key] = newVal
-					onChange(key, newVal)
-				}
-			}
+		}
+		if newVal != lastValues[key] {
+			lastValues[key] = newVal
+			onChange(key, newVal)
 		}
 	}
 }

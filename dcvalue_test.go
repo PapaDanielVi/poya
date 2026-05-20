@@ -73,8 +73,8 @@ func TestNewDcValueStruct(t *testing.T) {
 		Port int
 	}
 	d := NewDcValue(Config{Host: "localhost", Port: 5432})
-	if d.InternalKind() != entryKindStruct {
-		t.Errorf("InternalKind() = %v, want entryKindStruct", d.InternalKind())
+	if d.InternalKind() != EntryKindStruct {
+		t.Errorf("InternalKind() = %v, want EntryKindStruct", d.InternalKind())
 	}
 	if got := d.Get(); got.Host != "localhost" || got.Port != 5432 {
 		t.Errorf("Get() = %+v, want {localhost 5432}", got)
@@ -84,8 +84,8 @@ func TestNewDcValueStruct(t *testing.T) {
 func TestNewDcValueScalarKind(t *testing.T) {
 	t.Parallel()
 	d := NewDcValue(42)
-	if d.InternalKind() != entryKindScalar {
-		t.Errorf("InternalKind() = %v, want entryKindScalar", d.InternalKind())
+	if d.InternalKind() != EntryKindScalar {
+		t.Errorf("InternalKind() = %v, want EntryKindScalar", d.InternalKind())
 	}
 }
 
@@ -138,7 +138,7 @@ func TestDcValueStructConcurrentGetSet(t *testing.T) {
 			defer wg.Done()
 			cfg := Config{Host: "remote", Port: v}
 			data, _ := json.Marshal(cfg)
-			d.InternalSetJSON(data)
+			_ = d.InternalSetJSON(data) //nolint:errcheck,nolintlint
 		}(i)
 		go func() {
 			defer wg.Done()
