@@ -117,3 +117,25 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ### Concurrent Agent Pitfalls
 - **Multiple agents editing the same file will conflict and overwrite each other's changes**. When coordinating many parallel tasks, agents must not touch the same files. If they do, the last writer wins and earlier changes are lost. Plan agent scopes carefully to avoid overlap.
+
+### time.Duration Support
+- **`time.Duration` is supported as a scalar type** via `parseValue`'s `time.ParseDuration(raw)` case. `NewDcValue(time.Duration(30*time.Second))` sets kind to `EntryKindScalar` (since `time.Duration` is `int64`). Provider values must be valid duration strings like `"30s"`, `"1m"`, `"500ms"`.
+
+### Exported EntryKind
+- **`entryKind` was exported to `EntryKind`** to fix `revive` lint error about unexported return types on `InternalKind()`. Constants renamed to `EntryKindScalar`, `EntryKindStruct`, `EntryKindArray`. All references updated across `poya.go`, `dcvalue.go`, and test files.
+
+### Lint Fixes (golangci-lint)
+- **`errcheck` fixes**: Added `//nolint:errcheck` to deferred `Close()` calls where errors are intentionally ignored (common pattern for cleanup).
+- **`funlen` fix**: Refactored `parseValue` into `parseSigned`/`parseUnsigned` helpers to reduce statement count below 50.
+- **`gocognit` fixes**: Extracted `calcNestedPrefix` helper from `registerConfig` and `initialFetch`/`pollOnce` helpers from Redis `Watch` to reduce cognitive complexity.
+- **`govet` fix**: Avoided `else if` with short variable declarations (not supported in Go 1.21), refactored to separate `if` blocks with `continue`.
+- **`modernize` fix**: Added `//nolint:modernize` to goroutine creation (standard `sync.WaitGroup` pattern is acceptable).
+- **`godoclint` fix**: Updated doc comments to use `[atomic.Value]` link format.
+
+### Docker Image Updates
+- **Stable versions applied to all docker-compose files**:
+	- etcd: `quay.io/coreos/etcd:v3.6.11`
+	- MariaDB (MySQL example): `mariadb:10`
+	- PostgreSQL: `postgres:18.4`
+	- Redis: `redis:8.2.6`
+	- Vault: `hashicorp/vault:2.0`

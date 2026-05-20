@@ -88,7 +88,7 @@ Runnable examples for every provider live in the [`examples/`](examples/) direct
 
 ```bash
 # Start the backend (see the example file for Docker commands)
-docker run -d --name redis -p 6379:6379 redis:7
+docker run -d --name redis -p 6379:6379 redis:8.2.6
 
 # Run the example
 go run examples/redis/main.go
@@ -146,6 +146,19 @@ p := ports.Get() // returns []int
 ```
 
 The provider value must be a JSON array (e.g. `["alpha","beta"]` or `[8080,9090]`). Any slice element type that `encoding/json` supports works.
+
+**Duration values** — `time.Duration` is supported as a scalar type, parsed from strings like `"30s"`, `"1m"`, `"500ms"`:
+
+```go
+timeout := poya.NewDcValue(time.Duration(30 * time.Second))
+poya.Register(sdk, "timeout", timeout)
+
+// Provider value "1m30s" will be parsed to 90s
+t := timeout.Get() // returns time.Duration
+fmt.Println(t) // 30s (default)
+```
+
+The provider value must be a valid `time.Duration` string (supports standard Go duration formats).
 
 ### Declarative Config Structs — `RegisterConfig`
 
