@@ -9,7 +9,7 @@ Poya is a dynamic config SDK for Go. Developers register typed config values (`D
 ```
 DcValue[T]  → unified type: scalars parsed via type switch, structs JSON-decoded
 entry       → internal type-erased wrapper holding atomic.Value + entryKind
-Metrics     → interface with Prometheus/otel/expvar backends and NoopMetrics stub
+Metrics     → interface with Prometheus/otel backends and NoopMetrics stub
 Logger      → interface with Debug/Info/Warn/Error (slog-based default, noop stub)
 Provider    → interface with etcd (prefix watch), Redis/Vault/MySQL/PostgreSQL (batch poll), File (fsnotify)
 ```
@@ -17,7 +17,7 @@ Provider    → interface with etcd (prefix watch), Redis/Vault/MySQL/PostgreSQL
 Key types:
 - `DcValue[T]` in `dcvalue.go` — single generic type for both scalars and structs. Uses `reflect.TypeOf` at construction to determine kind. Has `InternalKind()`, `InternalSetJSON()` for struct handling.
 - `entry` in `poya.go` — has `kind entryKind` (`entryKindScalar` or `entryKindStruct`) determining how raw provider values are decoded
-- `Metrics` interface in `metrics/metrics.go` — implementations in `metrics/prometheus/`, `metrics/otel/`, `metrics/expvar/`
+- `Metrics` interface in `metrics/metrics.go` — implementations in `metrics/prometheus/`, `metrics/otel/`,
 - `Logger` interface in `logger/logger.go` — structured logging with slog-based default and noop stub
 
 ## 1. Think Before Coding
@@ -109,8 +109,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - **Always provide a noop stub** (`noopLogger`) for the disabled case, same pattern as `NoopMetrics`. This eliminates nil-checks and if-checks at call sites.
 
 ### Metrics Package Organization
-- **Split the Metrics interface from its implementations**. The interface lives in `metrics/metrics.go` (package `metrics`), while implementations live in `metrics/prometheus/`, `metrics/otel/`, `metrics/expvar/`. This keeps the interface importable without pulling in backend dependencies.
-- **expvar package name conflicts with stdlib**: The `metrics/expvar` package is named `expvar`, which shadows the stdlib `expvar` package. Use `expvar_test` as the test package name to avoid import issues. Use `publishOrGetMap`/`publishOrGetInt` helpers to handle duplicate `expvar.Publish` panics in tests.
+- **Split the Metrics interface from its implementations**. The interface lives in `metrics/metrics.go` (package `metrics`), while implementations live in `metrics/prometheus/`, `metrics/otel/`. This keeps the interface importable without pulling in backend dependencies.
 
 ### Struct Tag Parsing
 - **The `poyaTag` struct uses `key` and `prefix` fields** parsed from comma-separated tag values (`poya:"key=host,prefix=db"`). Fields without any tag default to their lowercased field name.

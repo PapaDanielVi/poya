@@ -17,7 +17,7 @@
 - **Multiple providers** — etcd (prefix watch API), Redis (batch polling), HashiCorp Vault (KV v2 polling), MySQL (batch polling), PostgreSQL (batch polling), File (fsnotify / fsevents)
 - **Efficient watching** — etcd uses a single prefix watch for all keys; polling providers fetch all keys in one batch per cycle; the SDK runs one goroutine per provider, not per key
 - **Lock-free reads** — `Get()` uses `atomic.Value` for zero-contention reads on the hot path
-- **Pluggable metrics** — Prometheus (default), OpenTelemetry, expvar, or inject your own implementation
+- **Pluggable metrics** — Prometheus (default), OpenTelemetry, or inject your own implementation
 - **Structured logging** — inject any logger; defaults to stderr via `log/slog`
 - **Prefix & nesting** — hierarchical key management with automatic prefix accumulation for nested structs
 - **Graceful shutdown** — context-based cancellation cleans up all background goroutines
@@ -233,12 +233,6 @@ sdk := poya.New(poya.Config{
 meter := otel.Meter("github.com/PapaDanielVi/poya")
 otelMetrics, _ := otel.New(meter)
 sdk := poya.New(poya.Config{Provider: rdb, Metrics: otelMetrics})
-```
-
-**expvar** (zero external dependencies):
-
-```go
-sdk := poya.New(poya.Config{Provider: rdb, Metrics: expvar.New()})
 ```
 
 **Custom implementation**:
@@ -475,8 +469,7 @@ poya/
 ├── metrics/
 │   ├── metrics.go             # Metrics interface + NoopMetrics stub
 │   ├── prometheus/            # Prometheus implementation
-│   ├── otel/                  # OpenTelemetry implementation
-│   └── expvar/                # expvar implementation (zero dependencies)
+│   └── otel/                  # OpenTelemetry implementation
 ├── logger/
 │   └── logger.go              # Logger interface + slog default + noop stub
 ├── provider/
