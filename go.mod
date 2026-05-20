@@ -11,9 +11,9 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.19.0
 	go.etcd.io/etcd/client/v3 v3.6.11
-	go.opentelemetry.io/otel v1.39.0
-	go.opentelemetry.io/otel/metric v1.39.0
-	go.yaml.in/yaml/v2 v2.4.2
+	go.opentelemetry.io/otel v1.43.0
+	go.opentelemetry.io/otel/metric v1.43.0
+	go.yaml.in/yaml/v2 v2.4.4
 )
 
 require (
