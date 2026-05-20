@@ -1,5 +1,6 @@
 // Package vault implements the provider.Provider interface for HashiCorp Vault KV v2 backends.
 // It polls Vault secrets at a configurable interval to sync dynamic configuration and feature flags.
+// All keys are fetched in a single goroutine per poll cycle for efficiency.
 package vault
 
 import (
@@ -22,7 +23,7 @@ type Config struct {
 }
 
 // Provider implements the poya Provider interface using Vault's KV secrets engine.
-// Vault has no native watch mechanism, so we poll at a configurable frequency.
+// All keys are fetched in a single goroutine per poll cycle.
 type Provider struct {
 	client       *vault.Client
 	pollInterval time.Duration
@@ -66,7 +67,6 @@ func (p *Provider) Get(ctx context.Context, key string) (string, error) {
 	if secret == nil || secret.Data == nil {
 		return "", nil
 	}
-	// Return the first value found, or empty string
 	for _, v := range secret.Data {
 		if s, ok := v.(string); ok {
 			return s, nil
@@ -75,30 +75,39 @@ func (p *Provider) Get(ctx context.Context, key string) (string, error) {
 	return "", nil
 }
 
-// Watch polls the key at the configured interval.
-// When the value changes, onChange is called with the new value.
-func (p *Provider) Watch(ctx context.Context, key string, onChange func(key string, value string)) error {
+// Watch polls all keys at the configured interval in a single goroutine.
+// When any value changes, onChange is called with the key and new value.
+func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+	if len(keys) == 0 {
+		<-ctx.Done()
+		return nil
+	}
+
 	ticker := time.NewTicker(p.pollInterval)
 	defer ticker.Stop()
 
-	var lastValue string
+	lastValues := make(map[string]string, len(keys))
 
-	// Initial fetch for baseline
-	val, _ := p.Get(ctx, key)
-	lastValue = val
+	// Initial fetch for all keys
+	for _, key := range keys {
+		val, _ := p.Get(ctx, key)
+		lastValues[key] = val
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			val, err := p.Get(ctx, key)
-			if err != nil {
-				continue
-			}
-			if val != lastValue {
-				lastValue = val
-				onChange(key, val)
+			for _, key := range keys {
+				val, err := p.Get(ctx, key)
+				if err != nil {
+					continue
+				}
+				if val != lastValues[key] {
+					lastValues[key] = val
+					onChange(key, val)
+				}
 			}
 		}
 	}
@@ -106,6 +115,5 @@ func (p *Provider) Watch(ctx context.Context, key string, onChange func(key stri
 
 // Close cleans up Vault client resources.
 func (p *Provider) Close() error {
-	// Vault client doesn't require explicit close
 	return nil
 }

@@ -15,7 +15,7 @@ import (
 type mockProvider struct {
 	mu      sync.Mutex
 	values  map[string]string
-	watchFn func(ctx context.Context, key string, onChange func(key string, value string)) error
+	watchFn func(ctx context.Context, keys []string, onChange func(key string, value string)) error
 }
 
 func newMockProvider() *mockProvider {
@@ -30,16 +30,18 @@ func (m *mockProvider) Get(_ context.Context, key string) (string, error) {
 	return m.values[key], nil
 }
 
-func (m *mockProvider) Watch(ctx context.Context, key string, onChange func(key string, value string)) error {
+func (m *mockProvider) Watch(ctx context.Context, keys []string, onChange func(key string, value string)) error {
 	if m.watchFn != nil {
-		return m.watchFn(ctx, key, onChange)
+		return m.watchFn(ctx, keys, onChange)
 	}
 	m.mu.Lock()
-	val := m.values[key]
-	m.mu.Unlock()
-	if val != "" {
-		onChange(key, val)
+	for _, key := range keys {
+		val := m.values[key]
+		if val != "" {
+			onChange(key, val)
+		}
 	}
+	m.mu.Unlock()
 	<-ctx.Done()
 	return nil
 }
@@ -258,14 +260,16 @@ func TestStartUpdatesScalarValue(t *testing.T) {
 	p.set("test/key", "initial")
 
 	updateCh := make(chan struct{}, 1)
-	p.watchFn = func(ctx context.Context, key string, onChange func(key string, value string)) error {
-		if key == "test/key" {
-			onChange(key, "initial")
-			go func() {
-				time.Sleep(50 * time.Millisecond)
-				onChange(key, "updated")
-				updateCh <- struct{}{}
-			}()
+	p.watchFn = func(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+		for _, key := range keys {
+			if key == "test/key" {
+				onChange(key, "initial")
+				go func() {
+					time.Sleep(50 * time.Millisecond)
+					onChange(key, "updated")
+					updateCh <- struct{}{}
+				}()
+			}
 		}
 		<-ctx.Done()
 		return nil
@@ -301,14 +305,16 @@ func TestStartUpdatesStructValue(t *testing.T) {
 	p := newMockProvider()
 
 	updateCh := make(chan struct{}, 1)
-	p.watchFn = func(ctx context.Context, key string, onChange func(key string, value string)) error {
-		if key == "test/db" {
-			onChange(key, `{"host":"localhost","port":5432}`)
-			go func() {
-				time.Sleep(50 * time.Millisecond)
-				onChange(key, `{"host":"remote","port":3306}`)
-				updateCh <- struct{}{}
-			}()
+	p.watchFn = func(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+		for _, key := range keys {
+			if key == "test/db" {
+				onChange(key, `{"host":"localhost","port":5432}`)
+				go func() {
+					time.Sleep(50 * time.Millisecond)
+					onChange(key, `{"host":"remote","port":3306}`)
+					updateCh <- struct{}{}
+				}()
+			}
 		}
 		<-ctx.Done()
 		return nil
@@ -346,14 +352,16 @@ func TestCustomMetricsReceiveEvents(t *testing.T) {
 	fm := &fakeMetrics{}
 
 	updateCh := make(chan struct{}, 1)
-	p.watchFn = func(ctx context.Context, key string, onChange func(key string, value string)) error {
-		if key == "test/db" {
-			onChange(key, `{"host":"localhost","port":5432}`)
-			go func() {
-				time.Sleep(50 * time.Millisecond)
-				onChange(key, `{"host":"remote","port":3306}`)
-				updateCh <- struct{}{}
-			}()
+	p.watchFn = func(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+		for _, key := range keys {
+			if key == "test/db" {
+				onChange(key, `{"host":"localhost","port":5432}`)
+				go func() {
+					time.Sleep(50 * time.Millisecond)
+					onChange(key, `{"host":"remote","port":3306}`)
+					updateCh <- struct{}{}
+				}()
+			}
 		}
 		<-ctx.Done()
 		return nil
@@ -462,7 +470,7 @@ func TestSDKStopCancelsWatchers(t *testing.T) {
 	p := newMockProvider()
 	watchStopped := make(chan struct{}, 1)
 
-	p.watchFn = func(ctx context.Context, _ string, _ func(_ string, _ string)) error {
+	p.watchFn = func(ctx context.Context, _ []string, _ func(_ string, _ string)) error {
 		<-ctx.Done()
 		watchStopped <- struct{}{}
 		return nil

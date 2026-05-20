@@ -28,13 +28,15 @@ func (m *integMockProvider) Get(_ context.Context, key string) (string, error) {
 	return m.values[key], nil
 }
 
-func (m *integMockProvider) Watch(ctx context.Context, key string, onChange func(key string, value string)) error {
+func (m *integMockProvider) Watch(ctx context.Context, keys []string, onChange func(key string, value string)) error {
 	m.mu.Lock()
-	val := m.values[key]
-	m.mu.Unlock()
-	if val != "" {
-		onChange(key, val)
+	for _, key := range keys {
+		val := m.values[key]
+		if val != "" {
+			onChange(key, val)
+		}
 	}
+	m.mu.Unlock()
 	<-ctx.Done()
 	return nil
 }
@@ -387,16 +389,18 @@ func (m *blockingMockProvider) Get(_ context.Context, key string) (string, error
 	return m.values[key], nil
 }
 
-func (m *blockingMockProvider) Watch(ctx context.Context, key string, onChange func(key string, value string)) error {
+func (m *blockingMockProvider) Watch(ctx context.Context, keys []string, onChange func(key string, value string)) error {
 	m.mu.Lock()
-	val := m.values[key]
+	for _, key := range keys {
+		val := m.values[key]
+		if val != "" {
+			onChange(key, val)
+		}
+		if m.wg != nil {
+			m.wg.Done()
+		}
+	}
 	m.mu.Unlock()
-	if val != "" {
-		onChange(key, val)
-	}
-	if m.wg != nil {
-		m.wg.Done()
-	}
 	<-ctx.Done()
 	return nil
 }

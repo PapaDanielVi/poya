@@ -1,12 +1,14 @@
 // Package postgresql implements the provider.Provider interface for PostgreSQL configuration backends.
 // It polls a database table at a configurable interval to sync dynamic configuration values.
 // Supports custom Repository implementations for non-standard table schemas.
+// All keys are fetched in a single query per poll cycle for efficiency.
 package postgresql
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/PapaDanielVi/poya/provider"
@@ -19,6 +21,7 @@ var _ provider.Provider = (*Provider)(nil)
 // the DefaultRepository for a simple key-value table.
 type Repository interface {
 	Get(ctx context.Context, key string) (string, error)
+	GetAll(ctx context.Context, keys []string) (map[string]string, error)
 }
 
 // DefaultRepository provides a simple key-value query against a PostgreSQL table.
@@ -60,6 +63,36 @@ func (r *DefaultRepository) Get(ctx context.Context, key string) (string, error)
 	return value, nil
 }
 
+// GetAll retrieves values for multiple keys in a single query using $N placeholders.
+func (r *DefaultRepository) GetAll(ctx context.Context, keys []string) (map[string]string, error) {
+	if len(keys) == 0 {
+		return make(map[string]string), nil
+	}
+	placeholders := make([]string, len(keys))
+	args := make([]interface{}, len(keys))
+	for i, k := range keys {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = k
+	}
+	query := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s IN (%s)",
+		r.keyColumn, r.valueColumn, r.tableName, r.keyColumn, strings.Join(placeholders, ","))
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("postgresql repository get all: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]string, len(keys))
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			continue
+		}
+		result[key] = value
+	}
+	return result, rows.Err()
+}
+
 // Config holds PostgreSQL-specific configuration.
 type Config struct {
 	// Repository is the data access layer. If nil, a DefaultRepository
@@ -88,7 +121,7 @@ type Config struct {
 }
 
 // Provider implements the poya Provider interface using polling against PostgreSQL.
-// PostgreSQL has no native watch mechanism, so we poll at a configurable frequency.
+// All keys are fetched in a single query per poll cycle.
 type Provider struct {
 	repo         Repository
 	pollInterval time.Duration
@@ -150,30 +183,40 @@ func (p *Provider) Get(ctx context.Context, key string) (string, error) {
 	return p.repo.Get(ctx, key)
 }
 
-// Watch polls the key at the configured interval.
-// When the value changes, onChange is called with the new value.
-func (p *Provider) Watch(ctx context.Context, key string, onChange func(key string, value string)) error {
+// Watch polls all keys at the configured interval using a single query.
+// When any value changes, onChange is called with the key and new value.
+func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+	if len(keys) == 0 {
+		<-ctx.Done()
+		return nil
+	}
+
 	ticker := time.NewTicker(p.pollInterval)
 	defer ticker.Stop()
 
-	var lastValue string
+	lastValues := make(map[string]string, len(keys))
 
-	// Initial fetch for baseline
-	val, _ := p.repo.Get(ctx, key)
-	lastValue = val
+	// Initial fetch
+	vals, _ := p.repo.GetAll(ctx, keys)
+	for k, v := range vals {
+		lastValues[k] = v
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			val, err := p.repo.Get(ctx, key)
+			vals, err := p.repo.GetAll(ctx, keys)
 			if err != nil {
 				continue
 			}
-			if val != lastValue {
-				lastValue = val
-				onChange(key, val)
+			for _, key := range keys {
+				newVal := vals[key]
+				if newVal != lastValues[key] {
+					lastValues[key] = newVal
+					onChange(key, newVal)
+				}
 			}
 		}
 	}

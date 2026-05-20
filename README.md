@@ -5,14 +5,15 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/PapaDanielVi/poya.svg)](https://pkg.go.dev/github.com/PapaDanielVi/poya)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**poya** is a Go SDK for dynamic runtime configuration and configuration management. Register typed config values, connect a backend provider (etcd, Redis, HashiCorp Vault, MySQL, or PostgreSQL), and the SDK keeps everything in sync in the background. Your application only calls `Get()` — no polling, no refresh logic. Supports use cases including feature flags, A/B testing, service discovery, and runtime parameter tuning.
+**poya** is a Go SDK for dynamic runtime configuration and configuration management. Register typed config values, connect a backend provider (etcd, Redis, HashiCorp Vault, MySQL, PostgreSQL, or local file), and the SDK keeps everything in sync in the background. Your application only calls `Get()` — no polling, no refresh logic. Supports use cases including feature flags, A/B testing, service discovery, and runtime parameter tuning.
 
 ## Features
 
 - **Type-safe generics** — `DcValue[string]`, `DcValue[int]`, `DcValue[YourConfig]`, any type you need
 - **Scalar and struct values** — a single `DcValue[T]` type handles both; scalars are parsed via type switch, structs are JSON-decoded automatically
 - **Declarative config structs** — define your entire config layout in a single struct with tags; poya discovers and registers all fields via reflection
-- **Multiple providers** — etcd (watch API), Redis (polling), HashiCorp Vault (KV v2 polling), MySQL (polling), PostgreSQL (polling)
+- **Multiple providers** — etcd (prefix watch API), Redis (batch polling), HashiCorp Vault (KV v2 polling), MySQL (batch polling), PostgreSQL (batch polling), File (fsnotify / fsevents)
+- **Efficient watching** — etcd uses a single prefix watch for all keys; polling providers fetch all keys in one batch per cycle; the SDK runs one goroutine per provider, not per key
 - **Lock-free reads** — `Get()` uses `atomic.Value` for zero-contention reads on the hot path
 - **Pluggable metrics** — Prometheus (default), OpenTelemetry, expvar, or inject your own implementation
 - **Structured logging** — inject any logger; defaults to stderr via `log/slog`
@@ -80,6 +81,31 @@ func main() {
 	fmt.Println(timeout.Get()) // always the latest value from Redis
 }
 ```
+
+## Examples
+
+Runnable examples for every provider live in the [`examples/`](examples/) directory. Each example includes setup instructions (Docker commands to start the backend, seed data) and demonstrates both individual `Register` and struct-based `RegisterConfig` patterns.
+
+| Example | Provider | Watch Strategy | File |
+| ------- | -------- | -------------- | ---- |
+| etcd    | etcd     | Single prefix watch (event-driven) | [`examples/etcd/main.go`](examples/etcd/main.go) |
+| Redis   | Redis    | Batch `MGET` polling | [`examples/redis/main.go`](examples/redis/main.go) |
+| Vault   | HashiCorp Vault | Sequential poll (KV v2) | [`examples/vault/main.go`](examples/vault/main.go) |
+| MySQL   | MySQL    | Batch `SELECT ... WHERE IN` polling | [`examples/mysql/main.go`](examples/mysql/main.go) |
+| PostgreSQL | PostgreSQL | Batch `SELECT ... WHERE IN ($N)` polling | [`examples/postgresql/main.go`](examples/postgresql/main.go) |
+| File    | Local file | fsnotify / fsevents (JSON + YAML) | [`examples/file/main.go`](examples/file/main.go) |
+
+**Running an example:**
+
+```bash
+# Start the backend (see the example file for Docker commands)
+docker run -d --name redis -p 6379:6379 redis:7
+
+# Run the example
+go run examples/redis/main.go
+```
+
+All examples use the same config keys (`timeout`, `verbose`, `db/host`, `db/port`) so you can swap providers and keep the same application code.
 
 ## API Reference
 
@@ -376,6 +402,40 @@ provider, _ := postgresql.New(postgresql.Config{
 })
 ```
 
+### File
+
+Watches a local JSON or YAML file for changes using fsnotify (fsevents on macOS, inotify on Linux). On every change the file is re-read and all registered values are updated via compare-and-swap. Supports flat `key: value` format (not nested):
+
+```go
+fp, err := file.New(file.Config{
+	Path: "/etc/myapp/config.json",
+	// Format: file.FormatAuto, // auto-detects from extension
+})
+if err != nil {
+	log.Fatal(err)
+}
+
+sdk := poya.New(poya.Config{Provider: fp, Prefix: "myapp/"})
+```
+
+**JSON file format** (`config.json`):
+```json
+{
+	"timeout": "30s",
+	"verbose": true,
+	"max_conn": 100
+}
+```
+
+**YAML file format** (`config.yaml`):
+```yaml
+timeout: 30s
+verbose: true
+max_conn: 100
+```
+
+Format is auto-detected from the file extension (`.json`, `.yaml`, `.yml`) or can be set explicitly via `Config.Format`.
+
 ## Use Cases
 
 - **Feature flags** — toggle features at runtime without redeployment
@@ -400,11 +460,12 @@ poya/
 │   └── logger.go              # Logger interface + slog default + noop stub
 ├── provider/
 │   ├── provider.go            # Provider interface
-│   ├── etcd/                  # etcd provider (native Watch API)
-│   ├── redis/                 # Redis provider (polling)
+│   ├── etcd/                  # etcd provider (prefix watch API)
+│   ├── redis/                 # Redis provider (batch MGET polling)
 │   ├── vault/                 # HashiCorp Vault provider (KV v2 polling)
-│   ├── mysql/                 # MySQL provider (polling, Repository interface)
-│   └── postgresql/            # PostgreSQL provider (polling, Repository interface)
+│   ├── mysql/                 # MySQL provider (batch polling, Repository interface)
+│   ├── postgresql/            # PostgreSQL provider (batch polling, Repository interface)
+│   └── file/                  # File provider (fsnotify / fsevents, JSON + YAML)
 └── ...
 ```
 
@@ -414,7 +475,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on adding providers, value
 
 ## Keywords
 
-Go, Golang, SDK, dynamic config, runtime configuration, configuration management, feature flags, A/B testing, service discovery, etcd, Redis, HashiCorp Vault, MySQL, PostgreSQL, type-safe config, generic config, Go SDK
+Go, Golang, SDK, dynamic config, runtime configuration, configuration management, feature flags, A/B testing, service discovery, etcd, Redis, HashiCorp Vault, MySQL, PostgreSQL, file config, fsnotify, fsevents, type-safe config, generic config, Go SDK
 
 ## License
 

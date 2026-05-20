@@ -2,7 +2,7 @@
 
 ## Project Purpose
 
-Poya is a dynamic config SDK for Go. Developers register typed config values (`DcValue[T]`), choose a provider (etcd, Redis, Vault, MySQL, PostgreSQL), and the SDK keeps values in sync in the background. Developers only call `Get()`.
+Poya is a dynamic config SDK for Go. Developers register typed config values (`DcValue[T]`), choose a provider (etcd, Redis, Vault, MySQL, PostgreSQL, file), and the SDK keeps values in sync in the background. Developers only call `Get()`.
 
 ## Architecture
 
@@ -11,7 +11,7 @@ DcValue[T]  → unified type: scalars parsed via type switch, structs JSON-decod
 entry       → internal type-erased wrapper holding atomic.Value + entryKind
 Metrics     → interface with Prometheus/otel/expvar backends and NoopMetrics stub
 Logger      → interface with Debug/Info/Warn/Error (slog-based default, noop stub)
-Provider    → interface with etcd (watch), Redis/Vault/MySQL/PostgreSQL (poll)
+Provider    → interface with etcd (prefix watch), Redis/Vault/MySQL/PostgreSQL (batch poll), File (fsnotify)
 ```
 
 Key types:
@@ -88,10 +88,13 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - **A single `DcValue[T]` replaces both `DcValue[T]` and `DcStruct[T]`**. The kind (scalar vs struct) is determined once at construction and stored in the `kind` field. This simplifies the entire registration pipeline — no need for `isDcStruct`, `handleDcStruct`, or `RegisterStruct`.
 - **The `entryKind` enum in `poya.go` cleanly dispatches decoding**. `updateEntry` switches on `entry.kind` to call either `updateScalarEntry` (type switch via `parseValue`) or `updateStructEntry` (JSON unmarshal via `reflect.New`).
 
-### Polling Provider Pattern
-- **All polling providers (Redis, Vault, MySQL, PostgreSQL) share the same structure**: initial fetch for baseline, `time.Ticker` loop, deduplicate via `lastValue` comparison, exit on `ctx.Done()`. When adding a new polling provider, copy this exact pattern.
+### Provider Watch Pattern
+- **The SDK launches one goroutine per provider, not per key.** `Start()` collects all registered keys into a slice and passes them to `provider.Watch(ctx, keys, onChange)`. Each provider decides the most efficient strategy internally.
+- **etcd uses a single prefix watch.** It computes the longest common prefix from all keys and does one `clientv3.Watch(ctx, prefix, WithPrefix())` call. Key names are extracted from event `Kv.Key`.
+- **Polling providers batch-fetch all keys per cycle.** Redis uses `MGET`; MySQL/PostgreSQL use `SELECT ... WHERE key IN (...)`. One goroutine iterates all keys per tick, comparing against a `lastValues` map.
 - **Polling providers should silently skip errors** in the watch loop (`continue` on error) rather than returning, since transient failures are expected and the next tick will retry.
-- **SQL providers use a `Repository` interface** so users can inject custom query logic for non-standard table schemas. The `DefaultRepository` handles simple key-value tables.
+- **SQL providers use a `Repository` interface** with `Get(ctx, key)` and `GetAll(ctx, keys)` methods so users can inject custom query logic for non-standard table schemas. The `DefaultRepository` handles simple key-value tables.
+- **File provider uses fsnotify** (fsevents on macOS, inotify on Linux). Watches both the file and its directory to handle atomic writes (rename). On change, re-reads and parses the file, then calls `onChange` for all registered keys. Supports flat JSON and YAML key:value formats (not nested).
 
 ### Logger Interface Design
 - **Follow the sugared-logger pattern** (`Debug(msg string, keysAndValues ...any)`) rather than structured `slog.With(...)` style. This matches idiomatic Go logging APIs (zap sugared, klog).

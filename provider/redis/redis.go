@@ -1,5 +1,6 @@
 // Package redis implements the provider.Provider interface for Redis configuration backends.
 // It polls Redis at a configurable interval to sync dynamic configuration values.
+// All keys are fetched in a single MGET call per poll cycle for efficiency.
 package redis
 
 import (
@@ -14,14 +15,14 @@ var _ provider.Provider = (*Provider)(nil)
 
 // Config holds Redis-specific configuration.
 type Config struct {
-	Addr        string        // Redis address, e.g. "localhost:6379"
-	Password    string        // Redis password (empty if no auth)
-	DB          int           // Redis database number
+	Addr         string        // Redis address, e.g. "localhost:6379"
+	Password     string        // Redis password (empty if no auth)
+	DB           int           // Redis database number
 	PollInterval time.Duration // how often to check for changes
 }
 
 // Provider implements the poya Provider interface using a polling strategy.
-// Redis has no native watch for arbitrary keys, so we poll at a configurable frequency.
+// All keys are fetched in a single MGET call per poll cycle.
 type Provider struct {
 	client       *goredis.Client
 	pollInterval time.Duration
@@ -47,18 +48,27 @@ func (p *Provider) Get(ctx context.Context, key string) (string, error) {
 	return p.client.Get(ctx, key).Result()
 }
 
-// Watch polls the key at the configured interval.
-// When the value changes, onChange is called with the new value.
-func (p *Provider) Watch(ctx context.Context, key string, onChange func(key string, value string)) error {
+// Watch polls all keys at the configured interval using a single MGET call.
+// When any value changes, onChange is called with the key and new value.
+func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+	if len(keys) == 0 {
+		<-ctx.Done()
+		return nil
+	}
+
 	ticker := time.NewTicker(p.pollInterval)
 	defer ticker.Stop()
 
-	var lastValue string
+	lastValues := make(map[string]string, len(keys))
 
-	// Do an initial fetch so we have a baseline
-	val, err := p.client.Get(ctx, key).Result()
-	if err == nil {
-		lastValue = val
+	// Initial fetch: get all keys in one MGET call
+	vals, _ := p.client.MGet(ctx, keys...).Result()
+	for i, v := range vals {
+		if v != nil {
+			if s, ok := v.(string); ok {
+				lastValues[keys[i]] = s
+			}
+		}
 	}
 
 	for {
@@ -66,13 +76,22 @@ func (p *Provider) Watch(ctx context.Context, key string, onChange func(key stri
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			val, err := p.client.Get(ctx, key).Result()
+			vals, err := p.client.MGet(ctx, keys...).Result()
 			if err != nil {
 				continue
 			}
-			if val != lastValue {
-				lastValue = val
-				onChange(key, val)
+			for i, v := range vals {
+				key := keys[i]
+				newVal := ""
+				if v != nil {
+					if s, ok := v.(string); ok {
+						newVal = s
+					}
+				}
+				if newVal != lastValues[key] {
+					lastValues[key] = newVal
+					onChange(key, newVal)
+				}
 			}
 		}
 	}

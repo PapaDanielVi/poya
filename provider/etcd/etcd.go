@@ -1,9 +1,11 @@
 // Package etcd implements the provider.Provider interface for etcd configuration backends.
-// It uses etcd's native Watch API for event-driven dynamic configuration updates.
+// It uses etcd's native Watch API with prefix-based watching for efficient event-driven
+// dynamic configuration updates. A single watch call monitors all keys under a common prefix.
 package etcd
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/PapaDanielVi/poya/provider"
@@ -50,10 +52,25 @@ func (p *Provider) Get(ctx context.Context, key string) (string, error) {
 	return string(resp.Kvs[0].Value), nil
 }
 
-// Watch monitors a key for changes using etcd's native Watch API.
-// When a change is detected, onChange is called with the new value.
-func (p *Provider) Watch(ctx context.Context, key string, onChange func(key string, value string)) error {
-	watchCh := p.client.Watch(ctx, key)
+// Watch monitors all keys under a common prefix using a single etcd Watch call.
+// It extracts the longest common prefix from the provided keys, watches that prefix,
+// and calls onChange for each key that changes.
+func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+	if len(keys) == 0 {
+		<-ctx.Done()
+		return nil
+	}
+
+	prefix := commonPrefix(keys)
+	if prefix == "" {
+		prefix = "/"
+	}
+	// Ensure prefix ends with "/" for proper range watching
+	if !strings.HasSuffix(prefix, "/") {
+		prefix = prefix + "/"
+	}
+
+	watchCh := p.client.Watch(ctx, prefix, clientv3.WithPrefix())
 	for {
 		select {
 		case <-ctx.Done():
@@ -77,4 +94,21 @@ func (p *Provider) Watch(ctx context.Context, key string, onChange func(key stri
 // Close disconnects from etcd.
 func (p *Provider) Close() error {
 	return p.client.Close()
+}
+
+// commonPrefix finds the longest common prefix among a set of strings.
+func commonPrefix(strs []string) string {
+	if len(strs) == 0 {
+		return ""
+	}
+	prefix := strs[0]
+	for _, s := range strs[1:] {
+		for !strings.HasPrefix(s, prefix) {
+			if len(prefix) == 0 {
+				return ""
+			}
+			prefix = prefix[:len(prefix)-1]
+		}
+	}
+	return prefix
 }

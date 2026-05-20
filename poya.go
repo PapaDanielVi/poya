@@ -219,27 +219,36 @@ func (s *SDK) Start() {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	s.log.Info("starting watchers", "count", len(s.values))
+	s.log.Info("starting watcher", "key_count", len(s.values))
 
-	for _, e := range s.values {
-		s.wg.Add(1)
-		go func(ent *entry) {
-			defer s.wg.Done()
-			s.log.Debug("watcher started", "key", ent.key)
-			err := s.provider.Watch(s.ctx, ent.key, func(changedKey string, rawValue string) {
-				start := time.Now()
-				s.metrics.IncWatchEvents(changedKey)
-				updateEntry(ent, rawValue)
-				s.metrics.ObserveUpdateLatency(changedKey, time.Since(start))
-				s.log.Debug("value updated", "key", changedKey)
-			})
-			if err != nil {
-				s.log.Error("watcher error", "key", ent.key, "error", err)
-				s.metrics.IncWatchErrors(ent.key)
-			}
-			s.log.Debug("watcher stopped", "key", ent.key)
-		}(e)
+	keys := make([]string, 0, len(s.values))
+	for k := range s.values {
+		keys = append(keys, k)
 	}
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.log.Debug("watcher started", "keys", len(keys))
+		err := s.provider.Watch(s.ctx, keys, func(changedKey string, rawValue string) {
+			start := time.Now()
+			s.metrics.IncWatchEvents(changedKey)
+			s.mu.RLock()
+			ent, ok := s.values[changedKey]
+			s.mu.RUnlock()
+			if !ok {
+				return
+			}
+			updateEntry(ent, rawValue)
+			s.metrics.ObserveUpdateLatency(changedKey, time.Since(start))
+			s.log.Debug("value updated", "key", changedKey)
+		})
+		if err != nil {
+			s.log.Error("watcher error", "error", err)
+			s.metrics.IncWatchErrors("provider")
+		}
+		s.log.Debug("watcher stopped")
+	}()
 }
 
 func (s *SDK) Stop() {

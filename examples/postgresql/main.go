@@ -1,0 +1,81 @@
+// Example: PostgreSQL provider
+//
+// Prerequisites:
+//   1. Start PostgreSQL:
+//      docker run -d --name postgres -p 5432:5432 -e POSTGRES_PASSWORD=root -e POSTGRES_DB=configdb postgres:16
+//   2. Create the config table and seed data:
+//      docker exec -i postgres psql -U postgres -d configdb <<'SQL'
+//      CREATE TABLE config (
+//          config_key   VARCHAR(255) PRIMARY KEY,
+//          config_value TEXT
+//      );
+//      INSERT INTO config VALUES ('myapp/db/host', 'localhost');
+//      INSERT INTO config VALUES ('myapp/db/port', '5432');
+//      INSERT INTO config VALUES ('myapp/verbose', 'true');
+//      INSERT INTO config VALUES ('myapp/timeout', '30s');
+//      SQL
+//   3. Run: go run examples/postgresql/main.go
+//   4. In another terminal, update a value:
+//      docker exec -i postgres psql -U postgres -d configdb -c "UPDATE config SET config_value='3306' WHERE config_key='myapp/db/port'"
+//      Watch the output — the update is reflected within the poll interval.
+package main
+
+import (
+	"database/sql"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/PapaDanielVi/poya"
+	"github.com/PapaDanielVi/poya/provider/postgresql"
+	_ "github.com/lib/pq"
+)
+
+func main() {
+	db, err := sql.Open("postgres", "postgres://postgres:root@localhost:5432/configdb?sslmode=disable")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	provider, err := postgresql.New(postgresql.Config{
+		DB:           db,
+		TableName:    "config",
+		KeyColumn:    "config_key",
+		ValueColumn:  "config_value",
+		PollInterval: 5 * time.Second,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	sdk := poya.New(poya.Config{
+		Provider: provider,
+		Prefix:   "myapp/",
+	})
+
+	timeout := poya.NewDcValue("30s")
+	verbose := poya.NewDcValue(false)
+	poya.Register(sdk, "timeout", timeout)
+	poya.Register(sdk, "verbose", verbose)
+
+	type DBConfig struct {
+		Host poya.DcValue[string] `poya:"key=host"`
+		Port poya.DcValue[int]    `poya:"key=port"`
+	}
+	cfg := DBConfig{
+		Host: *poya.NewDcValue("localhost"),
+		Port: *poya.NewDcValue(5432),
+	}
+	poya.RegisterConfig(sdk, &cfg)
+
+	sdk.Start()
+	defer sdk.Stop()
+
+	fmt.Println("Polling PostgreSQL every 5s — UPDATE config values to see changes reflected.")
+	for {
+		fmt.Printf("  timeout=%s  verbose=%v  db.host=%s  db.port=%d\n",
+			timeout.Get(), verbose.Get(), cfg.Host.Get(), cfg.Port.Get())
+		time.Sleep(5 * time.Second)
+	}
+}
