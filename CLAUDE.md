@@ -82,12 +82,20 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - **Unexported methods on generic types are invisible via reflection**, even in the same package. Fix: use exported method names (e.g., `InternalKey` instead of `setKey`).
 - **`atomic.Value` requires consistent types**. When JSON-decoding structs via `any`, `json.Unmarshal` into `*any` produces `map[string]any`, not the original struct. Fix: use `reflect.New(reflect.TypeOf(default))` to allocate the correct concrete type before unmarshaling.
 - **Struct fields passed by value to `interface{}` are not addressable** via reflection. `RegisterConfig` must take a pointer so `fv.CanAddr()` returns true for fields.
-- **Detecting struct vs scalar generic types** is done at construction time via `reflect.TypeOf(defaultValue).Kind() == reflect.Struct`. This is more reliable than checking method signatures at registration time.
+- **Detecting struct vs scalar vs array generic types** is done at construction time via `reflect.TypeOf(defaultValue).Kind()` — `reflect.Struct` for structs, `reflect.Slice` for arrays, everything else is scalar. This is more reliable than checking method signatures at registration time.
 
 ### DcStruct Merge into DcValue
-- **A single `DcValue[T]` replaces both `DcValue[T]` and `DcStruct[T]`**. The kind (scalar vs struct) is determined once at construction and stored in the `kind` field. This simplifies the entire registration pipeline — no need for `isDcStruct`, `handleDcStruct`, or `RegisterStruct`.
-- **The `entryKind` enum in `poya.go` cleanly dispatches decoding**. `updateEntry` switches on `entry.kind` to call either `updateScalarEntry` (type switch via `parseValue`) or `updateStructEntry` (JSON unmarshal via `reflect.New`).
+- **A single `DcValue[T]` handles scalars, structs, and arrays**. The kind is determined once at construction via `reflect.TypeOf` and stored in the `kind` field. This simplifies the entire registration pipeline — no need for separate types or registration functions.
+`- **The `entryKind` enum in `poya.go` cleanly dispatches decoding**. `updateEntry` switches on `entry.kind` to call `updateScalarEntry` (type switch via `parseValue`), `updateStructEntry` (JSON unmarshal via `reflect.New`), or `updateArrayEntry` (JSON unmarshal into a new slice). Three kinds: `entryKindScalar`, `entryKindStruct`, `entryKindArray`.
 
+
+### Array Values
+- **Slice types (`[]string`, `[]int`, `[]float64`, etc.) are supported as a first-class kind**. `NewDcValue` detects them via `reflect.TypeOf(default).Kind() == reflect.Slice` and sets `entryKindArray`.
+- **`updateArrayEntry` uses `json.Unmarshal` into `reflect.New(reflect.TypeOf(default))`**, same pattern as structs but producing a slice. The provider value must be a JSON array (e.g. `["a","b"]` or `[1,2,3]`).
+- **`parseValue` does not handle array types** — they bypass the scalar type-switch entirely and go through `updateArrayEntry` which does JSON decoding. This means arrays always expect JSON-formatted provider values, never plain comma-separated strings.
+- **Any element type works** as long as `encoding/json` can unmarshal it: `[]string`, `[]int`, `[]bool`, `[]float64`, even `[]MyStruct`.
+- **`InternalSetJSON` is shared between struct and array kinds** — both use `reflect.New` + `json.Unmarshal` + `rv.Elem().Interface()` to store the decoded value.
+- **`SetDefaultAndValue` (used by decode hooks) also detects slice kinds** so hooks can initialize array-typed DcValues in-place.
 ### Provider Watch Pattern
 - **The SDK launches one goroutine per provider, not per key.** `Start()` collects all registered keys into a slice and passes them to `provider.Watch(ctx, keys, onChange)`. Each provider decides the most efficient strategy internally.
 - **etcd uses a single prefix watch.** It computes the longest common prefix from all keys and does one `clientv3.Watch(ctx, prefix, WithPrefix())` call. Key names are extracted from event `Kv.Key`.

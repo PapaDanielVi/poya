@@ -342,6 +342,109 @@ func TestStartUpdatesStructValue(t *testing.T) {
 	sdk.Stop()
 }
 
+func TestStartUpdatesArrayValue(t *testing.T) {
+	p := newMockProvider()
+
+	updateCh := make(chan struct{}, 1)
+	p.watchFn = func(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+		for _, key := range keys {
+			if key == "test/ports" {
+				onChange(key, `[8080, 9090]`)
+				go func() {
+					time.Sleep(50 * time.Millisecond)
+					onChange(key, `[3000, 4000, 5000]`)
+					updateCh <- struct{}{}
+				}()
+			}
+		}
+		<-ctx.Done()
+		return nil
+	}
+
+	sdk := New(Config{Provider: p, Prefix: "test/"})
+	val := NewDcValue([]int{})
+	Register(sdk, "ports", val)
+
+	sdk.Start()
+
+	select {
+	case <-updateCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for update signal")
+	}
+
+	time.Sleep(10 * time.Millisecond)
+
+	got := val.Get()
+	want := []int{3000, 4000, 5000}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Get() = %v, want %v", got, want)
+	}
+
+	sdk.Stop()
+}
+
+func TestStartUpdatesArrayStringValue(t *testing.T) {
+	p := newMockProvider()
+
+	updateCh := make(chan struct{}, 1)
+	p.watchFn = func(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+		for _, key := range keys {
+			if key == "test/tags" {
+				onChange(key, `["alpha","beta"]`)
+				go func() {
+					time.Sleep(50 * time.Millisecond)
+					onChange(key, `["gamma","delta","epsilon"]`)
+					updateCh <- struct{}{}
+				}()
+			}
+		}
+		<-ctx.Done()
+		return nil
+	}
+
+	sdk := New(Config{Provider: p, Prefix: "test/"})
+	val := NewDcValue([]string{})
+	Register(sdk, "tags", val)
+
+	sdk.Start()
+
+	select {
+	case <-updateCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for update signal")
+	}
+
+	time.Sleep(10 * time.Millisecond)
+
+	got := val.Get()
+	want := []string{"gamma", "delta", "epsilon"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Get() = %v, want %v", got, want)
+	}
+
+	sdk.Stop()
+}
+
+func TestRegisterConfigArray(t *testing.T) {
+	p := newMockProvider()
+	sdk := New(Config{Provider: p, Prefix: "myapp/"})
+
+	val := NewDcValue([]string{})
+	Register(sdk, "tags", val)
+
+	sdk.mu.RLock()
+	defer sdk.mu.RUnlock()
+
+	e, ok := sdk.values["myapp/tags"]
+	if !ok {
+		t.Fatal("tags array not registered")
+	}
+	if e.kind != entryKindArray {
+		t.Errorf("expected entryKindArray (%d), got %d", entryKindArray, e.kind)
+	}
+}
+
 func TestCustomMetricsReceiveEvents(t *testing.T) {
 	type DBConfig struct {
 		Host string `json:"host"`

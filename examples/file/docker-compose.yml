@@ -1,0 +1,24 @@
+# Docker Compose for File provider example
+#
+# The file provider watches a local file — no external backend needed.
+# This compose file simply creates the initial config file.
+#
+# Usage:
+#   docker compose up -d   # creates /tmp/config.json
+#   go run main.go
+#
+# While running, edit the file to see live updates:
+#   echo '{"timeout":"60s","verbose":false,"max_conn":200}' > /tmp/config.json
+#
+# Tear down:
+#   docker compose down
+
+services:
+  init-config:
+    image: busybox:1.37
+    volumes:
+      - type: bind
+        source: /tmp
+        target: /tmp
+    command: >
+      sh -c "echo '{\"timeout\":\"30s\",\"verbose\":true,\"max_conn\":100}' > /tmp/config.json"

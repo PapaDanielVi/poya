@@ -1,0 +1,22 @@
+# Docker Compose for HashiCorp Vault provider example
+#
+# Usage:
+#   docker compose up -d
+#   docker compose exec vault vault kv put secret/myapp/db host=localhost port=5432
+#   docker compose exec vault vault kv put secret/myapp/verbose value=true
+#   docker compose exec vault vault kv put secret/myapp/timeout value=30s
+#   go run main.go
+#
+# Tear down:
+#   docker compose down -v
+
+services:
+  vault:
+    image: hashicorp/vault:1.21
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: root
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    ports:
+      - "8200:8200"

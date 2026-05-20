@@ -1,0 +1,23 @@
+# Docker Compose for Redis provider example
+#
+# Usage:
+#   docker compose up -d
+#   docker compose exec redis redis-cli SET myapp/db/host localhost
+#   docker compose exec redis redis-cli SET myapp/db/port 5432
+#   docker compose exec redis redis-cli SET myapp/verbose true
+#   docker compose exec redis redis-cli SET myapp/timeout 30s
+#   go run main.go
+#
+# Tear down:
+#   docker compose down -v
+
+services:
+  redis:
+    image: redis:8.6
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:

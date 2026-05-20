@@ -1,0 +1,35 @@
+# Docker Compose for MySQL provider example
+#
+# Usage:
+#   docker compose up -d
+#   # Wait for MySQL to be ready, then seed the config table:
+#   docker compose exec mysql mysql -uroot -proot -e "
+#     CREATE DATABASE IF NOT EXISTS configdb;
+#     USE configdb;
+#     CREATE TABLE IF NOT EXISTS config (
+#       config_key   VARCHAR(255) PRIMARY KEY,
+#       config_value TEXT
+#     );
+#     INSERT INTO config VALUES ('myapp/db/host', 'localhost');
+#     INSERT INTO config VALUES ('myapp/db/port', '5432');
+#     INSERT INTO config VALUES ('myapp/verbose', 'true');
+#     INSERT INTO config VALUES ('myapp/timeout', '30s');
+#   "
+#   go run main.go
+#
+# Tear down:
+#   docker compose down -v
+
+services:
+  mysql:
+    image: mysql:9.6
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: configdb
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+volumes:
+  mysql-data:

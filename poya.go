@@ -75,6 +75,7 @@ type entryKind int
 const (
 	entryKindScalar entryKind = iota
 	entryKindStruct
+	entryKindArray
 )
 
 func New(cfg Config) *SDK {
@@ -262,6 +263,8 @@ func updateEntry(e *entry, raw string) {
 	switch e.kind {
 	case entryKindStruct:
 		updateStructEntry(e, raw)
+	case entryKindArray:
+		updateArrayEntry(e, raw)
 	default:
 		updateScalarEntry(e, raw)
 	}
@@ -276,6 +279,14 @@ func updateScalarEntry(e *entry, raw string) {
 }
 
 func updateStructEntry(e *entry, raw string) {
+	rv := reflect.New(reflect.TypeOf(e.defaultVal))
+	if err := json.Unmarshal([]byte(raw), rv.Interface()); err != nil {
+		return
+	}
+	e.atomic.Store(rv.Elem().Interface())
+}
+
+func updateArrayEntry(e *entry, raw string) {
 	rv := reflect.New(reflect.TypeOf(e.defaultVal))
 	if err := json.Unmarshal([]byte(raw), rv.Interface()); err != nil {
 		return

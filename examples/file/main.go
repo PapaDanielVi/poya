@@ -20,13 +20,14 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"time"
 
 	"github.com/PapaDanielVi/poya"
 	"github.com/PapaDanielVi/poya/provider/file"
 )
+
+const pollInterval = 5 * time.Second
 
 func main() {
 	provider, err := file.New(file.Config{
@@ -51,10 +52,10 @@ func main() {
 	sdk.Start()
 	defer sdk.Stop()
 
-	fmt.Println("Watching /tmp/config.json for changes — edit the file to see updates.")
+	log.Println("Watching /tmp/config.json for changes — edit the file to see updates.")
 	for {
-		fmt.Printf("  timeout=%s  verbose=%v  max_conn=%d\n",
+		log.Printf("  timeout=%s  verbose=%v  max_conn=%d\n",
 			timeout.Get(), verbose.Get(), maxConn.Get())
-		time.Sleep(5 * time.Second)
+		time.Sleep(pollInterval)
 	}
 }

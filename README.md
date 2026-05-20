@@ -10,7 +10,7 @@
 ## Features
 
 - **Type-safe generics** — `DcValue[string]`, `DcValue[int]`, `DcValue[YourConfig]`, any type you need
-- **Scalar and struct values** — a single `DcValue[T]` type handles both; scalars are parsed via type switch, structs are JSON-decoded automatically
+- **Scalar, struct, and array values** — a single `DcValue[T]` type handles all three; scalars are parsed via type switch, structs and arrays are JSON-decoded automatically
 - **Declarative config structs** — define your entire config layout in a single struct with tags; poya discovers and registers all fields via reflection
 - **Multiple providers** — etcd (prefix watch API), Redis (batch polling), HashiCorp Vault (KV v2 polling), MySQL (batch polling), PostgreSQL (batch polling), File (fsnotify / fsevents)
 - **Efficient watching** — etcd uses a single prefix watch for all keys; polling providers fetch all keys in one batch per cycle; the SDK runs one goroutine per provider, not per key
@@ -138,6 +138,25 @@ poya.Register(sdk, "database", dbVal)
 cfg := dbVal.Get() // returns DatabaseConfig
 fmt.Println(cfg.Host)
 ```
+
+
+**Array values** — the provider stores a JSON array; poya decodes it into your slice:
+
+```go
+tags := poya.NewDcValue([]string{"alpha", "beta"})
+poya.Register(sdk, "tags", tags)
+
+s := tags.Get() // returns []string
+fmt.Println(s[0]) // "alpha"
+
+// Works with any element type:
+ports := poya.NewDcValue([]int{8080, 9090})
+poya.Register(sdk, "ports", ports)
+
+p := ports.Get() // returns []int
+```
+
+The provider value must be a JSON array (e.g. `["alpha","beta"]` or `[8080,9090]`). Any slice element type that `encoding/json` supports works.
 
 ### Declarative Config Structs — `RegisterConfig`
 
