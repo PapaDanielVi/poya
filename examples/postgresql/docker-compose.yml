@@ -21,7 +21,7 @@
 
 services:
   postgres:
-    image: postgres:18
+    image: postgres:18.4
     environment:
       POSTGRES_PASSWORD: root
       POSTGRES_DB: configdb
