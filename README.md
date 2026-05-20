@@ -22,19 +22,6 @@
 - **Prefix & nesting** — hierarchical key management with automatic prefix accumulation for nested structs
 - **Graceful shutdown** — context-based cancellation cleans up all background goroutines
 
-## Supported Scalar Types
-
-`DcValue[T]` supports these scalar types for automatic string parsing:
-
-| Category          | Types                                         |
-| ----------------- | --------------------------------------------- |
-| Signed integers   | `int`, `int8`, `int16`, `int32`, `int64`      |
-| Unsigned integers | `uint`, `uint8`, `uint16`, `uint32`, `uint64` |
-| Floating point    | `float32`, `float64`                          |
-| Other             | `string`, `bool`, `time.Duration`, `[]byte`   |
-
-Any other type falls through to raw string return.
-
 ## Installation
 
 ```bash
