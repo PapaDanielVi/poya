@@ -32,6 +32,7 @@ import (
 
 	"github.com/PapaDanielVi/poya"
 	"github.com/PapaDanielVi/poya/provider/vault"
+	vaultapi "github.com/hashicorp/vault/api"
 )
 
 const (
@@ -105,9 +106,17 @@ func watchForChanges(log *slog.Logger, cfg *CheckoutConfig) {
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
-	prov, err := vault.New(vault.Config{
-		Address:      "http://localhost:8200",
-		Token:        "root",
+	// Build and fully configure the Vault client yourself, then hand it to poya.
+	vaultCfg := vaultapi.DefaultConfig()
+	vaultCfg.Address = "http://localhost:8200"
+	client, err := vaultapi.NewClient(vaultCfg)
+	if err != nil {
+		log.Error("failed to create vault client", "error", err)
+		os.Exit(1)
+	}
+	client.SetToken("root")
+
+	prov, err := vault.New(client, vault.Config{
 		MountPath:    "secret",
 		PollInterval: pollInterval,
 	})

@@ -20,12 +20,8 @@ var _ provider.Provider = (*Provider)(nil)
 // when keyspace notifications are enabled. %d is the database number.
 const keyspaceChannelFmt = "__keyspace@%d__:"
 
-// Config holds Redis-specific configuration.
+// Config holds Redis provider behavior that is not part of the client itself.
 type Config struct {
-	Addr     string // Redis address, e.g. "localhost:6379".
-	Password string // Redis password (empty if no auth).
-	DB       int    // Redis database number.
-
 	// ResyncInterval, when greater than zero, re-reads every key on a timer as a
 	// safety net against missed notifications (e.g. a dropped connection). Watching
 	// itself is event-driven via keyspace notifications and does not require it.
@@ -40,15 +36,14 @@ type Provider struct {
 	resyncInterval time.Duration
 }
 
-// New creates a new Redis provider connected to the given address.
-func New(cfg Config) *Provider {
+// New creates a Redis provider from a fully-configured go-redis client. The
+// caller owns the client and configures every connection option (address, auth,
+// TLS, pool sizing, the database number, etc.) on goredis.Options directly. The
+// database number used for the keyspace channel is read from client.Options().
+func New(client *goredis.Client, cfg Config) *Provider {
 	return &Provider{
-		client: goredis.NewClient(&goredis.Options{
-			Addr:     cfg.Addr,
-			Password: cfg.Password,
-			DB:       cfg.DB,
-		}),
-		db:             cfg.DB,
+		client:         client,
+		db:             client.Options().DB,
 		resyncInterval: cfg.ResyncInterval,
 	}
 }
@@ -65,29 +60,57 @@ func (p *Provider) Get(ctx context.Context, key string) (string, error) {
 // Watch subscribes to keyspace notifications for the common prefix of all keys
 // using a single pattern subscription. When Redis publishes a change for a watched
 // key, onChange is called with the key and its new value. One subscription and one
-// goroutine cover every key, regardless of how many are registered.
+// goroutine cover every key, regardless of how many are registered. If the
+// subscription drops (a broken connection, the channel closing) it re-subscribes
+// with exponential backoff and re-reads all keys, returning only when the context
+// is cancelled.
 func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key string, value string)) error {
 	if len(keys) == 0 {
 		<-ctx.Done()
 		return nil
 	}
 
-	// Keyspace notifications are off by default; enable key events for all commands.
-	if err := p.client.ConfigSet(ctx, "notify-keyspace-events", "KEA").Err(); err != nil {
-		return fmt.Errorf("redis: failed to enable keyspace notifications: %w", err)
-	}
-
 	watched := make(map[string]struct{}, len(keys))
 	for _, k := range keys {
 		watched[k] = struct{}{}
 	}
-
 	channelPrefix := fmt.Sprintf(keyspaceChannelFmt, p.db)
 	pattern := channelPrefix + provider.CommonPrefix(keys) + "*"
+
+	// lastValues persists across reconnects so a re-subscribe only re-emits keys
+	// whose value actually changed while the subscription was down.
+	lastValues := make(map[string]string, len(keys))
+
+	attempt := 0
+	for {
+		if ctx.Err() != nil {
+			return nil
+		}
+		if p.subscribeOnce(ctx, keys, watched, channelPrefix, pattern, lastValues, onChange) {
+			return nil
+		}
+		if !provider.SleepBackoff(ctx, attempt) {
+			return nil
+		}
+		attempt++
+	}
+}
+
+// subscribeOnce enables keyspace notifications, subscribes, and consumes events
+// until the context is cancelled (returns true) or the subscription drops
+// (returns false), signalling the caller to re-subscribe.
+func (p *Provider) subscribeOnce(ctx context.Context, keys []string, watched map[string]struct{}, channelPrefix, pattern string, lastValues map[string]string, onChange func(key string, value string)) bool {
+	// Keyspace notifications are off by default; enable key events for all commands.
+	if err := p.client.ConfigSet(ctx, "notify-keyspace-events", "KEA").Err(); err != nil {
+		return false
+	}
+
 	pubsub := p.client.PSubscribe(ctx, pattern)
 	defer pubsub.Close() //nolint:errcheck,nolintlint
 
-	lastValues := p.seed(ctx, keys, onChange)
+	// Re-read all keys on every (re)connect to load current state and catch any
+	// change missed while disconnected.
+	p.resyncAll(ctx, keys, lastValues, onChange)
 
 	var resync <-chan time.Time
 	if p.resyncInterval > 0 {
@@ -100,10 +123,10 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return true
 		case msg, ok := <-msgCh:
 			if !ok {
-				return nil
+				return false
 			}
 			key := strings.TrimPrefix(msg.Channel, channelPrefix)
 			if _, watching := watched[key]; !watching {
@@ -118,23 +141,6 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 			p.resyncAll(ctx, keys, lastValues, onChange)
 		}
 	}
-}
-
-// seed reads all keys once via a single MGET and emits their initial values.
-func (p *Provider) seed(ctx context.Context, keys []string, onChange func(key string, value string)) map[string]string {
-	lastValues := make(map[string]string, len(keys))
-	vals, err := p.client.MGet(ctx, keys...).Result()
-	if err != nil {
-		return lastValues
-	}
-	for i, v := range vals {
-		s, _ := v.(string)
-		lastValues[keys[i]] = s
-		if s != "" {
-			onChange(keys[i], s)
-		}
-	}
-	return lastValues
 }
 
 // resyncAll re-reads every key via a single MGET and emits any that changed.

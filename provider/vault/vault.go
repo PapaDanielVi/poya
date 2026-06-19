@@ -16,12 +16,18 @@ import (
 
 var _ provider.Provider = (*Provider)(nil)
 
-// Config holds Vault-specific configuration.
+const (
+	// defaultPollInterval is how often the provider polls Vault when the caller
+	// does not set one.
+	defaultPollInterval = 10 * time.Second
+	// defaultMountPath is the KV v2 mount used when the caller does not set one.
+	defaultMountPath = "secret"
+)
+
+// Config holds Vault provider behavior that is not part of the client itself.
 type Config struct {
-	Address      string        // Vault address, e.g. "http://localhost:8200".
-	Token        string        // Vault token for authentication.
-	PollInterval time.Duration // how often to check for changes.
-	MountPath    string        // KV secrets engine mount path, e.g. "secret".
+	PollInterval time.Duration // how often to check for changes. Default: 10s.
+	MountPath    string        // KV secrets engine mount path. Default: "secret".
 }
 
 // Provider implements the poya Provider interface using Vault's KV v2 secrets engine.
@@ -32,24 +38,17 @@ type Provider struct {
 	mountPath    string
 }
 
-// New creates a new Vault provider connected to the given address.
-func New(cfg Config) (*Provider, error) {
+// New creates a Vault provider from a fully-configured Vault client. The caller
+// owns the client and configures every connection option (address, TLS,
+// namespace, the auth token, etc.) on the vault.Client directly, including
+// calling SetToken. PollInterval and MountPath default to 10s and "secret".
+func New(client *vault.Client, cfg Config) (*Provider, error) {
 	if cfg.PollInterval == 0 {
-		cfg.PollInterval = 10 * time.Second //nolint:mnd // default poll interval
+		cfg.PollInterval = defaultPollInterval
 	}
 	if cfg.MountPath == "" {
-		cfg.MountPath = "secret"
+		cfg.MountPath = defaultMountPath
 	}
-
-	vaultConfig := vault.DefaultConfig()
-	vaultConfig.Address = cfg.Address
-
-	client, err := vault.NewClient(vaultConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create vault client: %w", err)
-	}
-
-	client.SetToken(cfg.Token)
 
 	return &Provider{
 		client:       client,
@@ -128,6 +127,8 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 func (p *Provider) poll(ctx context.Context, secretPath, prefix string, keys []string, lastValues map[string]string, onChange func(key string, value string)) {
 	fields, err := p.readSecret(ctx, secretPath)
 	if err != nil {
+		// Skip this cycle; the ticker retries on the next interval, so a transient
+		// Vault outage self-heals without tearing down the watch.
 		return
 	}
 	for _, key := range keys {

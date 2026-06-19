@@ -31,6 +31,7 @@ import (
 
 	"github.com/PapaDanielVi/poya"
 	"github.com/PapaDanielVi/poya/provider/redis"
+	goredis "github.com/redis/go-redis/v9"
 )
 
 const (
@@ -103,9 +104,11 @@ func watchForChanges(log *slog.Logger, cfg *CheckoutConfig) {
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
-	prov := redis.New(redis.Config{
+	// Build and fully configure the go-redis client yourself, then hand it to poya.
+	client := goredis.NewClient(&goredis.Options{
 		Addr: "localhost:6379",
 	})
+	prov := redis.New(client, redis.Config{})
 	defer prov.Close() //nolint:errcheck,nolintlint
 
 	sdk := poya.New(poya.Config{

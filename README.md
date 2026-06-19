@@ -16,9 +16,13 @@
 - **Declarative config structs** — define your entire config layout in a single struct with tags; poya discovers and registers all fields via reflection
 - **Multiple providers** — etcd (prefix watch API), Redis (keyspace notifications), HashiCorp Vault (single KV v2 secret), MySQL (batch polling), PostgreSQL (batch polling), File (fsnotify / fsevents)
 - **Efficient watching** — every provider watches all keys with one prefix-scoped operation and one goroutine, never per key: etcd uses a single prefix watch, Redis a single keyspace subscription, SQL a single batched query per cycle. Current values load on start, so reads never sit at their defaults.
+- **Bring your own client** — each provider takes a fully-configured backend client (etcd, go-redis, Vault, `*sql.DB`), so you control every connection option: TLS, auth, pool sizing, timeouts
+- **Resilient watching** — providers reconnect after network failures with exponential backoff and re-read current values, so a dropped connection self-heals without restarting your app
+- **Switchable off** — set `Config.Disabled` to skip all connections and watching; every value stays at its default, so you can ship one binary with dynamic config on or off
 - **Lock-free reads** — `Get()` uses `atomic.Value` for zero-contention reads on the hot path
-- **Pluggable metrics** — Prometheus (default), OpenTelemetry, or inject your own implementation
-- **Structured logging** — inject any logger; defaults to stderr via `log/slog`
+- **Pluggable metrics** — Prometheus (default), OpenTelemetry, or inject your own implementation, plus a ready-made Grafana dashboard
+- **Structured logging** — defaults to stderr via `log/slog`, with ready-made adapters for zap, logrus, and zerolog, or inject your own
+- **Wide type support** — every Go scalar kind (including named types like `type Level int`), `time.Duration`, `time.Time`, `[]byte`, and `encoding.TextUnmarshaler` types parse from provider strings; structs and slices decode from JSON
 - **Prefix & nesting** — hierarchical key management with automatic prefix accumulation for nested structs
 - **Graceful shutdown** — context-based cancellation cleans up all background goroutines
 
@@ -42,13 +46,13 @@ import (
 
 	"github.com/PapaDanielVi/poya"
 	"github.com/PapaDanielVi/poya/provider/redis"
+	goredis "github.com/redis/go-redis/v9"
 )
 
 func main() {
-	// 1. Create a provider
-	rdb := redis.New(redis.Config{
-		Addr: "localhost:6379",
-	})
+	// 1. Build and configure the backend client yourself, then hand it to a provider.
+	client := goredis.NewClient(&goredis.Options{Addr: "localhost:6379"})
+	rdb := redis.New(client, redis.Config{})
 
 	// 2. Create the SDK
 	sdk := poya.New(poya.Config{
@@ -264,6 +268,8 @@ When metrics are disabled, a no-op stub is used — no if-checks in hot paths.
 
 Each SDK instance uses its own Prometheus registry, so multiple instances won't conflict.
 
+A ready-made Grafana dashboard for these metrics lives at [`docs/grafana/poya-dashboard.json`](docs/grafana/poya-dashboard.json). Import it in Grafana (Dashboards → Import → Upload JSON) and pick your Prometheus data source. It charts watch event and error rates per key, update latency quantiles (p50/p95/p99), and the registered-key count.
+
 ### Logging
 
 poya uses a simple structured-logger interface. Inject any logger via `Config.Logger`:
@@ -286,20 +292,60 @@ type Logger interface {
 }
 ```
 
+Ready-made adapters wrap the popular logging libraries. Each `New` takes a fully-configured logger that you own:
+
+```go
+import (
+	poyazap "github.com/PapaDanielVi/poya/logger/zap"
+	poyalogrus "github.com/PapaDanielVi/poya/logger/logrus"
+	poyazerolog "github.com/PapaDanielVi/poya/logger/zerolog"
+)
+
+// zap
+zl, _ := zap.NewProduction()
+sdk := poya.New(poya.Config{Provider: rdb, Logger: poyazap.New(zl)})
+
+// logrus
+sdk := poya.New(poya.Config{Provider: rdb, Logger: poyalogrus.New(logrus.New())})
+
+// zerolog
+sdk := poya.New(poya.Config{Provider: rdb, Logger: poyazerolog.New(zerolog.New(os.Stderr))})
+```
+
+To silence poya entirely, pass `logger.NewNoop()`.
+
+### Disabling dynamic config
+
+Set `Config.Disabled` to turn poya off without removing it from your code. `Start()` becomes a no-op: the SDK never connects to a provider, never watches anything, and every registered `DcValue` keeps its default. A provider isn't required in this mode, so you can wire the flag from an environment variable or config file and ship the same binary with dynamic config on or off.
+
+```go
+sdk := poya.New(poya.Config{
+	Provider: rdb,            // ignored while disabled; may be nil
+	Disabled: os.Getenv("DYNAMIC_CONFIG") != "on",
+})
+poya.Register(sdk, "timeout", timeout)
+sdk.Start() // no-op when disabled; timeout.Get() returns its default
+```
+
 ## Provider Setup
+
+Every network provider takes a fully-configured client that you build and own. The provider never creates or hides the client, so you control endpoints, TLS, auth, pooling, and timeouts directly through each library's own config. The provider reconnects automatically with exponential backoff if the watch is dropped.
 
 ### etcd
 
-Uses etcd's native Watch API for event-driven updates (no polling):
+Uses etcd's native Watch API for event-driven updates (no polling). Pass a configured `*clientv3.Client`:
 
 ```go
-etcdProvider, err := etcd.New(etcd.Config{
+import clientv3 "go.etcd.io/etcd/client/v3"
+
+cli, err := clientv3.New(clientv3.Config{
 	Endpoints:   []string{"localhost:2379"},
 	DialTimeout: 5 * time.Second,
 })
 if err != nil {
 	log.Fatal(err)
 }
+etcdProvider := etcd.New(cli)
 defer etcdProvider.Close()
 
 sdk := poya.New(poya.Config{Provider: etcdProvider, Prefix: "myapp/"})
@@ -309,15 +355,20 @@ sdk := poya.New(poya.Config{Provider: etcdProvider, Prefix: "myapp/"})
 
 Watches every key under their common prefix with a single keyspace-notification
 subscription, so changes arrive as events. The provider enables keyspace
-notifications on the server itself. Set `ResyncInterval` to also re-read all keys
-on a timer as a safety net against missed notifications:
+notifications on the server itself and reads the database number from the client.
+Set `ResyncInterval` to also re-read all keys on a timer as a safety net against
+missed notifications. Pass a configured `*redis.Client`:
 
 ```go
-rdb := redis.New(redis.Config{
-	Addr:           "localhost:6379",
-	Password:       "",  // no auth
-	DB:             0,
-	ResyncInterval: 0,   // optional; 0 means event-driven only
+import goredis "github.com/redis/go-redis/v9"
+
+client := goredis.NewClient(&goredis.Options{
+	Addr:     "localhost:6379",
+	Password: "", // no auth
+	DB:       0,
+})
+rdb := redis.New(client, redis.Config{
+	ResyncInterval: 0, // optional; 0 means event-driven only
 })
 defer rdb.Close()
 
@@ -328,12 +379,21 @@ sdk := poya.New(poya.Config{Provider: rdb, Prefix: "myapp/"})
 
 Stores the whole config in one KV v2 secret at the keys' common prefix, one field
 per key, so a single read per poll cycle covers every key. With `Prefix: "myapp/"`
-the secret lives at `<mount>/myapp` with fields named after each key:
+the secret lives at `<mount>/myapp` with fields named after each key. Pass a
+configured `*vault.Client` (set the token on the client yourself):
 
 ```go
-v, err := vault.New(vault.Config{
-	Address:      "http://localhost:8200",
-	Token:        "root-token",
+import vaultapi "github.com/hashicorp/vault/api"
+
+vaultCfg := vaultapi.DefaultConfig()
+vaultCfg.Address = "http://localhost:8200"
+client, err := vaultapi.NewClient(vaultCfg)
+if err != nil {
+	log.Fatal(err)
+}
+client.SetToken("root-token")
+
+v, err := vault.New(client, vault.Config{
 	MountPath:    "secret",
 	PollInterval: 10 * time.Second,
 })
@@ -470,16 +530,21 @@ Format is auto-detected from the file extension (`.json`, `.yaml`, `.yml`) or ca
 poya/
 ├── poya.go                    # SDK: New, Start, Stop, Register, RegisterConfig
 ├── dcvalue.go                 # DcValue[T] — unified scalar + struct config value
+├── docs/grafana/              # Grafana dashboard JSON for the Prometheus metrics
 ├── metrics/
 │   ├── metrics.go             # Metrics interface + NoopMetrics stub
 │   ├── prometheus/            # Prometheus implementation
 │   └── otel/                  # OpenTelemetry implementation
 ├── logger/
-│   └── logger.go              # Logger interface + slog default + noop stub
+│   ├── logger.go              # Logger interface + slog default + noop stub
+│   ├── zap/                   # zap adapter
+│   ├── logrus/                # logrus adapter
+│   └── zerolog/               # zerolog adapter
 ├── provider/
 │   ├── provider.go            # Provider interface
+│   ├── backoff.go             # Shared exponential backoff for reconnects
 │   ├── etcd/                  # etcd provider (prefix watch API)
-│   ├── redis/                 # Redis provider (batch MGET polling)
+│   ├── redis/                 # Redis provider (keyspace notifications)
 │   ├── vault/                 # HashiCorp Vault provider (KV v2 polling)
 │   ├── mysql/                 # MySQL provider (batch polling, Repository interface)
 │   ├── postgresql/            # PostgreSQL provider (batch polling, Repository interface)

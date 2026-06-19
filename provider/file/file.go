@@ -113,6 +113,7 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 	// immediately instead of staying at their defaults until the first edit.
 	p.emitAll(keys, onChange)
 
+	attempt := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -129,13 +130,23 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 				// Small delay to let the writer finish.
 				time.Sleep(50 * time.Millisecond) //nolint:mnd // delay for atomic write completion
 				p.detectChanges(keys, onChange)
+				// A healthy event means the watch recovered; reset the backoff.
+				attempt = 0
 			}
 		case watchErr, ok := <-watcher.Errors:
 			if !ok {
 				return nil
 			}
-			// Silently continue on watch errors; the file may be temporarily unavailable.
+			// The watch errored (the file may be temporarily unavailable). Back off,
+			// then re-add the file and its directory so the watch recovers instead of
+			// going silently dead.
 			_ = watchErr
+			if !provider.SleepBackoff(ctx, attempt) {
+				return nil
+			}
+			attempt++
+			_ = watcher.Add(p.path) //nolint:errcheck // best-effort re-add; next error retries.
+			_ = watcher.Add(dir)    //nolint:errcheck // best-effort re-add; next error retries.
 		}
 	}
 }

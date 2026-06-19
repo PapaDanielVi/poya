@@ -29,6 +29,20 @@ func NewWithHandler(h slog.Handler) Logger {
 	return &slogLogger{l: slog.New(h)}
 }
 
+// NewNoop returns a Logger that discards every message. Use it to silence SDK
+// logging entirely, the same way [github.com/PapaDanielVi/poya/metrics.NoopMetrics]
+// disables metrics.
+func NewNoop() Logger {
+	return noopLogger{}
+}
+
+type noopLogger struct{}
+
+func (noopLogger) Debug(_ string, _ ...any) {}
+func (noopLogger) Info(_ string, _ ...any)  {}
+func (noopLogger) Warn(_ string, _ ...any)  {}
+func (noopLogger) Error(_ string, _ ...any) {}
+
 type slogLogger struct {
 	l *slog.Logger
 }

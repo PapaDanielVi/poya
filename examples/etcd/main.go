@@ -30,6 +30,7 @@ import (
 
 	"github.com/PapaDanielVi/poya"
 	"github.com/PapaDanielVi/poya/provider/etcd"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 const (
@@ -103,14 +104,16 @@ func watchForChanges(log *slog.Logger, cfg *CheckoutConfig) {
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
-	prov, err := etcd.New(etcd.Config{
+	// Build and fully configure the etcd client yourself, then hand it to poya.
+	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   []string{"localhost:2379"},
 		DialTimeout: dialTimeout,
 	})
 	if err != nil {
-		log.Error("failed to create etcd provider", "error", err)
+		log.Error("failed to create etcd client", "error", err)
 		os.Exit(1)
 	}
+	prov := etcd.New(cli)
 	defer prov.Close() //nolint:errcheck,nolintlint
 
 	sdk := poya.New(poya.Config{

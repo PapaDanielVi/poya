@@ -217,6 +217,8 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 func (p *Provider) poll(ctx context.Context, keys []string, lastValues map[string]string, onChange func(key string, value string)) {
 	pollVals, err := p.repo.GetAll(ctx, keys)
 	if err != nil {
+		// Skip this cycle; the ticker retries on the next interval, so a transient
+		// database outage self-heals without tearing down the watch.
 		return
 	}
 	for _, key := range keys {

@@ -7,9 +7,10 @@ package poya
 
 import (
 	"context"
+	"encoding"
 	"encoding/json"
-	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,6 +51,12 @@ type Config struct {
 	EnableMetrics bool
 	Metrics       metrics.Metrics
 	Logger        logger.Logger
+
+	// Disabled turns off dynamic configuration entirely. When true, Start() is a
+	// no-op: the SDK never connects to a provider, never watches anything, and
+	// every registered DcValue keeps its default. A provider is not required in
+	// this mode. Use it to ship the same binary with dynamic config switched off.
+	Disabled bool
 }
 
 type SDK struct {
@@ -62,6 +69,7 @@ type SDK struct {
 	wg       sync.WaitGroup
 	metrics  metrics.Metrics
 	log      logger.Logger
+	disabled bool
 }
 
 type entry struct {
@@ -106,6 +114,7 @@ func New(cfg Config) *SDK {
 		cancel:   cancel,
 		metrics:  m,
 		log:      l,
+		disabled: cfg.Disabled,
 	}
 }
 
@@ -232,6 +241,11 @@ func handleDcValue(s *SDK, fv reflect.Value, fullKey string) {
 }
 
 func (s *SDK) Start() {
+	if s.disabled {
+		s.log.Info("poya disabled, not watching; registered values stay at their defaults")
+		return
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -309,64 +323,88 @@ func updateArrayEntry(e *entry, raw string) {
 	e.atomic.Store(rv.Elem().Interface())
 }
 
-func parseSigned(raw string) (int64, error) {
-	var i int64
-	_, err := fmt.Sscanf(raw, "%d", &i)
-	return i, err
-}
-
-func parseUnsigned(raw string) (uint64, error) {
-	var u uint64
-	_, err := fmt.Sscanf(raw, "%d", &u)
-	return u, err
-}
-
+// parseValue converts a raw provider string into the concrete type of def.
+// It drives off reflect.Kind plus strconv, so every Go scalar kind is handled,
+// including named types whose underlying kind is a basic type (e.g. type Level
+// int). Types that need bespoke parsing (time.Duration, time.Time, []byte) are
+// special-cased first, and any type implementing encoding.TextUnmarshaler parses
+// itself. The returned value's dynamic type matches def so it can be stored in
+// the same atomic.Value without a type mismatch. On a parse error the caller
+// keeps the previous value.
 func parseValue(raw string, def any) (any, error) {
 	switch def.(type) {
-	case string:
-		return raw, nil
-	case int:
-		i, err := parseSigned(raw)
-		return int(i), err
-	case int8:
-		i, err := parseSigned(raw)
-		return int8(i), err //nolint:gosec,nolintlint
-	case int16:
-		i, err := parseSigned(raw)
-		return int16(i), err //nolint:gosec,nolintlint
-	case int32:
-		i, err := parseSigned(raw)
-		return int32(i), err //nolint:gosec,nolintlint
-	case int64:
-		return parseSigned(raw)
-	case uint:
-		u, err := parseUnsigned(raw)
-		return uint(u), err
-	case uint8:
-		u, err := parseUnsigned(raw)
-		return uint8(u), err //nolint:gosec,nolintlint
-	case uint16:
-		u, err := parseUnsigned(raw)
-		return uint16(u), err //nolint:gosec,nolintlint
-	case uint32:
-		u, err := parseUnsigned(raw)
-		return uint32(u), err //nolint:gosec,nolintlint
-	case uint64:
-		return parseUnsigned(raw)
-	case float32:
-		var f float64
-		_, err := fmt.Sscanf(raw, "%f", &f)
-		return float32(f), err
-	case float64:
-		var f float64
-		_, err := fmt.Sscanf(raw, "%f", &f)
-		return f, err
-	case bool:
-		return raw == "true" || raw == "1", nil
 	case time.Duration:
 		return time.ParseDuration(raw)
+	case time.Time:
+		return time.Parse(time.RFC3339, raw)
 	case []byte:
 		return []byte(raw), nil
+	}
+
+	rt := reflect.TypeOf(def)
+	if rt == nil {
+		return raw, nil
+	}
+
+	if parsed, ok, err := parseTextUnmarshaler(raw, rt); ok {
+		return parsed, err
+	}
+
+	return parseByKind(raw, rt)
+}
+
+// parseTextUnmarshaler uses encoding.TextUnmarshaler when the default type's
+// pointer implements it, letting domain types parse their own string form. The
+// bool reports whether the type was handled at all.
+func parseTextUnmarshaler(raw string, rt reflect.Type) (any, bool, error) {
+	ptr := reflect.New(rt)
+	tu, ok := ptr.Interface().(encoding.TextUnmarshaler)
+	if !ok {
+		return nil, false, nil
+	}
+	if err := tu.UnmarshalText([]byte(raw)); err != nil {
+		return nil, true, err
+	}
+	return ptr.Elem().Interface(), true, nil
+}
+
+// parseByKind parses raw into the basic kind of rt and converts the result back
+// to rt so named types round-trip. Unparseable kinds fall back to the raw string.
+func parseByKind(raw string, rt reflect.Type) (any, error) {
+	//nolint:exhaustive // only basic scalar kinds are parseable from a string; others fall through.
+	switch rt.Kind() {
+	case reflect.String:
+		return reflect.ValueOf(raw).Convert(rt).Interface(), nil
+	case reflect.Bool:
+		b, err := strconv.ParseBool(raw)
+		if err != nil {
+			return nil, err
+		}
+		return reflect.ValueOf(b).Convert(rt).Interface(), nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		i, err := strconv.ParseInt(raw, 10, rt.Bits())
+		if err != nil {
+			return nil, err
+		}
+		return reflect.ValueOf(i).Convert(rt).Interface(), nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		u, err := strconv.ParseUint(raw, 10, rt.Bits())
+		if err != nil {
+			return nil, err
+		}
+		return reflect.ValueOf(u).Convert(rt).Interface(), nil
+	case reflect.Float32, reflect.Float64:
+		f, err := strconv.ParseFloat(raw, rt.Bits())
+		if err != nil {
+			return nil, err
+		}
+		return reflect.ValueOf(f).Convert(rt).Interface(), nil
+	case reflect.Complex64, reflect.Complex128:
+		c, err := strconv.ParseComplex(raw, rt.Bits())
+		if err != nil {
+			return nil, err
+		}
+		return reflect.ValueOf(c).Convert(rt).Interface(), nil
 	default:
 		return raw, nil
 	}
