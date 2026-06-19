@@ -5,6 +5,7 @@ go 1.26.3
 require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-sql-driver/mysql v1.10.0
+	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/hashicorp/vault/api v1.23.0
 	github.com/lib/pq v1.12.3
 	github.com/mitchellh/mapstructure v1.5.0

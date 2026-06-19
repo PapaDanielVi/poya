@@ -2,6 +2,7 @@ package hooks_test
 
 import (
 	"context"
+	"net"
 	"reflect"
 	"sync"
 	"testing"
@@ -450,6 +451,41 @@ func TestMapstructureHookFunc_DurationFromString(t *testing.T) {
 	}
 	if got := cfg.Timeout.Get(); got != 90*time.Second {
 		t.Fatalf("Timeout.Get() = %v, want 1m30s", got)
+	}
+}
+
+func TestMapstructureHookFunc_TimeFromRFC3339(t *testing.T) {
+	t.Parallel()
+	type cfgT struct {
+		StartAt *poya.DcValue[time.Time] `mapstructure:"start_at"`
+	}
+	var cfg cfgT
+	decodeHook(t, map[string]any{"start_at": "2026-06-19T10:30:00Z"}, &cfg)
+
+	want, _ := time.Parse(time.RFC3339, "2026-06-19T10:30:00Z")
+	if cfg.StartAt == nil {
+		t.Fatal("StartAt is nil")
+	}
+	if got := cfg.StartAt.Get(); !got.Equal(want) {
+		t.Fatalf("StartAt.Get() = %v, want %v", got, want)
+	}
+}
+
+// TestMapstructureHookFunc_TextUnmarshaler verifies a named scalar whose pointer
+// implements encoding.TextUnmarshaler (here net.IP) parses from its string form.
+func TestMapstructureHookFunc_TextUnmarshaler(t *testing.T) {
+	t.Parallel()
+	type cfgT struct {
+		Bind *poya.DcValue[net.IP] `mapstructure:"bind"`
+	}
+	var cfg cfgT
+	decodeHook(t, map[string]any{"bind": "10.0.0.1"}, &cfg)
+
+	if cfg.Bind == nil {
+		t.Fatal("Bind is nil")
+	}
+	if got := cfg.Bind.Get(); !got.Equal(net.ParseIP("10.0.0.1")) {
+		t.Fatalf("Bind.Get() = %v, want 10.0.0.1", got)
 	}
 }
 

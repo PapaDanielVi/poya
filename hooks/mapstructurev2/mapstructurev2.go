@@ -1,25 +1,44 @@
-// Package hooks provides mapstructure decode hooks for use with DcValue[T]
-// fields. When decoding YAML, env, or map[string]any data into structs
-// containing DcValue[T] fields, use MapstructureHookFunc() so that
-// mapstructure automatically constructs properly-typed DcValue instances.
+// Package mapstructurev2 provides decode hooks for DcValue[T] fields that target
+// github.com/go-viper/mapstructure/v2, the actively maintained mapstructure fork.
 //
-// This package targets github.com/mitchellh/mapstructure (v1), which is what
-// viper < 1.18 and many older tools use. For koanf and viper >= 1.18, which use
-// github.com/go-viper/mapstructure/v2, use the sibling package
-// github.com/PapaDanielVi/poya/hooks/mapstructurev2 instead.
-package hooks
+// Several config loaders decode into structs through this fork:
+//   - koanf v2 (github.com/knadh/koanf/v2): pass HookFunc() in the DecoderConfig
+//     of koanf.UnmarshalConf.
+//   - viper >= 1.18 (github.com/spf13/viper): pass HookFunc() via viper.DecodeHook.
+//   - OpenTelemetry Collector and other tools built on go-viper/mapstructure/v2.
+//
+// The hooks behave identically to the sibling package
+// github.com/PapaDanielVi/poya/hooks, which targets the older
+// github.com/mitchellh/mapstructure (v1) used by viper < 1.18. Use whichever
+// matches your loader's mapstructure dependency.
+//
+// koanf usage:
+//
+//	k := koanf.New(".")
+//	// ... load providers/parsers into k ...
+//	err := k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{
+//	    Tag: "koanf",
+//	    DecoderConfig: &mapstructure.DecoderConfig{
+//	        DecodeHook: mapstructurev2.HookFunc(),
+//	        Result:     &cfg,
+//	    },
+//	})
+//
+// viper (>= 1.18) usage:
+//
+//	err := viper.Unmarshal(&cfg, viper.DecodeHook(mapstructurev2.HookFunc()))
+package mapstructurev2
 
 import (
 	"reflect"
 
 	"github.com/PapaDanielVi/poya"
 	"github.com/PapaDanielVi/poya/hooks/internal/dchook"
-	"github.com/mitchellh/mapstructure"
+	"github.com/go-viper/mapstructure/v2"
 )
 
-// MapstructureHookFunc returns a mapstructure.DecodeHookFunc that detects
-// target fields of type *poya.DcValue[T] and initializes them from the
-// decoded source data.
+// HookFunc returns a mapstructure.DecodeHookFunc that detects target fields of
+// type *poya.DcValue[T] and initializes them from the decoded source data.
 //
 // It handles every DcValue kind:
 //   - scalar T: the source value is converted, or parsed when it arrives as a
@@ -29,22 +48,13 @@ import (
 //   - any T whose pointer implements encoding.TextUnmarshaler: parses itself.
 //   - struct T: a map source (typically from YAML) is JSON-encoded and decoded into T.
 //   - slice T: a slice source is JSON-encoded and decoded into the slice.
-//
-// Usage:
-//
-//	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-//	    DecodeHook: hooks.MapstructureHookFunc(),
-//	    Result:     &cfg,
-//	})
-//	if err != nil { ... }
-//	err = decoder.Decode(viper.AllSettings())
-func MapstructureHookFunc() mapstructure.DecodeHookFunc {
+func HookFunc() mapstructure.DecodeHookFunc {
 	return mapstructure.DecodeHookFuncValue(dchook.Hook)
 }
 
-// MapstructureHookFuncValue returns a mapstructure.DecodeHookFuncValue for
-// use with ComposeDecodeHookFunc or when the value hook type is needed.
-func MapstructureHookFuncValue() mapstructure.DecodeHookFuncValue {
+// HookFuncValue returns a mapstructure.DecodeHookFuncValue for use with
+// ComposeDecodeHookFunc or when the value hook type is needed.
+func HookFuncValue() mapstructure.DecodeHookFuncValue {
 	return func(from, to reflect.Value) (any, error) {
 		return dchook.Hook(from, to)
 	}

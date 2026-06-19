@@ -22,6 +22,7 @@
 - **Lock-free reads** — `Get()` uses `atomic.Value` for zero-contention reads on the hot path
 - **Pluggable metrics** — Prometheus (default), OpenTelemetry, or inject your own implementation, plus a ready-made Grafana dashboard
 - **Structured logging** — defaults to stderr via `log/slog`, with ready-made adapters for zap, logrus, and zerolog, or inject your own
+- **Config-loader hooks** — decode hooks seed `DcValue` defaults from your existing config files; works with viper (both mapstructure forks) and koanf v2
 - **Wide type support** — every Go scalar kind (including named types like `type Level int`), `time.Duration`, `time.Time`, `[]byte`, and `encoding.TextUnmarshaler` types parse from provider strings; structs and slices decode from JSON
 - **Prefix & nesting** — hierarchical key management with automatic prefix accumulation for nested structs
 - **Graceful shutdown** — context-based cancellation cleans up all background goroutines
@@ -327,6 +328,73 @@ poya.Register(sdk, "timeout", timeout)
 sdk.Start() // no-op when disabled; timeout.Get() returns its default
 ```
 
+### Loading initial values from config files (Viper, koanf, ...)
+
+A common pattern is to seed `DcValue` defaults from a static config file (YAML, TOML, env) at startup, then let a provider take over for live updates. Most Go config loaders decode into structs through [mapstructure](https://github.com/go-viper/mapstructure), and poya ships decode hooks that turn decoded values into properly-typed `DcValue[T]` instances.
+
+There are two mapstructure forks in the wild, so there are two hook packages with the same API:
+
+| Package | mapstructure import | Loaders |
+| --- | --- | --- |
+| `github.com/PapaDanielVi/poya/hooks` | `github.com/mitchellh/mapstructure` (v1) | viper < 1.18, anything on the original mapstructure |
+| `github.com/PapaDanielVi/poya/hooks/mapstructurev2` | `github.com/go-viper/mapstructure/v2` | koanf v2, viper >= 1.18, OpenTelemetry Collector |
+
+Both packages handle every `DcValue` kind: scalars (parsed from strings for env/flat config), `time.Duration`, `time.Time` (RFC3339), any type whose pointer implements `encoding.TextUnmarshaler`, structs (from nested maps), and slices.
+
+**koanf v2:**
+
+```go
+import (
+	"github.com/PapaDanielVi/poya"
+	"github.com/PapaDanielVi/poya/hooks/mapstructurev2"
+	"github.com/knadh/koanf/v2"
+	"github.com/go-viper/mapstructure/v2"
+)
+
+type AppConfig struct {
+	Host    *poya.DcValue[string]        `koanf:"host" poya:"key=host"`
+	Port    *poya.DcValue[int]           `koanf:"port" poya:"key=port"`
+	Timeout *poya.DcValue[time.Duration] `koanf:"timeout" poya:"key=timeout"`
+}
+
+var cfg AppConfig
+err := k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{
+	Tag: "koanf",
+	DecoderConfig: &mapstructure.DecoderConfig{
+		DecodeHook: mapstructurev2.HookFunc(),
+		Result:     &cfg,
+	},
+})
+// cfg now holds the file values as DcValue defaults.
+poya.RegisterConfig(sdk, &cfg)
+sdk.Start() // provider values override the file defaults as they change.
+```
+
+**viper >= 1.18:**
+
+```go
+import "github.com/PapaDanielVi/poya/hooks/mapstructurev2"
+
+err := viper.Unmarshal(&cfg, viper.DecodeHook(mapstructurev2.HookFunc()))
+poya.RegisterConfig(sdk, &cfg)
+```
+
+**viper < 1.18 (or any tool on mitchellh/mapstructure):**
+
+```go
+import "github.com/PapaDanielVi/poya/hooks"
+
+decoder, _ := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+	DecodeHook: hooks.MapstructureHookFunc(),
+	Result:     &cfg,
+})
+err := decoder.Decode(viper.AllSettings())
+```
+
+Both packages also expose `StringToDcValueHookFunc()` (string sources only, for env-style config) and `JSONStringHookFunc()` (a struct or slice stored as a single JSON string), which compose with other hooks via `mapstructure.ComposeDecodeHookFunc`.
+
+Tag-based loaders that write struct fields directly without a decode hook (for example `caarlos0/env`) have no place to plug a hook in, so they aren't supported through this mechanism. Use one of the mapstructure-based loaders above to seed `DcValue` defaults.
+
 ## Provider Setup
 
 Every network provider takes a fully-configured client that you build and own. The provider never creates or hides the client, so you control endpoints, TLS, auth, pooling, and timeouts directly through each library's own config. The provider reconnects automatically with exponential backoff if the watch is dropped.
@@ -530,6 +598,10 @@ Format is auto-detected from the file extension (`.json`, `.yaml`, `.yml`) or ca
 poya/
 ├── poya.go                    # SDK: New, Start, Stop, Register, RegisterConfig
 ├── dcvalue.go                 # DcValue[T] — unified scalar + struct config value
+├── hooks/
+│   ├── hooks.go               # mapstructure v1 decode hooks (viper < 1.18)
+│   ├── internal/dchook/       # shared, mapstructure-agnostic decode logic
+│   └── mapstructurev2/        # go-viper/mapstructure/v2 hooks (koanf, viper >= 1.18)
 ├── docs/grafana/              # Grafana dashboard JSON for the Prometheus metrics
 ├── metrics/
 │   ├── metrics.go             # Metrics interface + NoopMetrics stub
@@ -558,7 +630,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on adding providers, value
 
 ## Keywords
 
-Go, Golang, SDK, dynamic config, runtime configuration, configuration management, feature flags, A/B testing, service discovery, etcd, Redis, HashiCorp Vault, MySQL, PostgreSQL, file config, fsnotify, fsevents, type-safe config, generic config, Go SDK
+Go, Golang, SDK, dynamic config, runtime configuration, configuration management, feature flags, A/B testing, service discovery, etcd, Redis, HashiCorp Vault, MySQL, PostgreSQL, file config, fsnotify, fsevents, type-safe config, generic config, viper, koanf, mapstructure, decode hook, Go SDK
 
 ## License
 
