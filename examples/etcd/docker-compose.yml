@@ -1,12 +1,17 @@
-# Docker Compose for etcd provider example
+# Docker Compose for the etcd provider example.
 #
 # Usage:
 #   docker compose up -d
-#   docker compose exec etcd etcdctl put myapp/db/host localhost
-#   docker compose exec etcd etcdctl put myapp/db/port 5432
-#   docker compose exec etcd etcdctl put myapp/verbose true
-#   docker compose exec etcd etcdctl put myapp/timeout 30s
+#   docker compose exec etcd etcdctl put checkout/log_level info
+#   docker compose exec etcd etcdctl put checkout/request_timeout 30s
+#   docker compose exec etcd etcdctl put checkout/rate_limit_rps 100
+#   docker compose exec etcd etcdctl put checkout/maintenance_mode false
+#   docker compose exec etcd etcdctl put checkout/database '{"host":"db.internal","port":5432,"max_open_conns":20}'
+#   docker compose exec etcd etcdctl put checkout/allowed_origins '["https://app.example.com"]'
 #   go run main.go
+#
+# Change a value to see the app log the event:
+#   docker compose exec etcd etcdctl put checkout/rate_limit_rps 500
 #
 # Tear down:
 #   docker compose down -v

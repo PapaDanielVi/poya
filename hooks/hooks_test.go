@@ -415,6 +415,114 @@ func (m *blockingMockProvider) Watch(ctx context.Context, keys []string, onChang
 
 func (m *blockingMockProvider) Close() error { return nil }
 
+func TestMapstructureHookFunc_SliceT(t *testing.T) {
+	t.Parallel()
+	type cfgT struct {
+		Origins *poya.DcValue[[]string] `mapstructure:"origins"`
+	}
+	var cfg cfgT
+	decodeHook(t, map[string]any{
+		"origins": []any{"https://a.com", "https://b.com"},
+	}, &cfg)
+
+	if cfg.Origins == nil {
+		t.Fatal("Origins is nil")
+	}
+	got := cfg.Origins.Get()
+	if len(got) != 2 || got[0] != "https://a.com" || got[1] != "https://b.com" {
+		t.Fatalf("Origins.Get() = %v, want [https://a.com https://b.com]", got)
+	}
+	if cfg.Origins.InternalKind() != 2 { // EntryKindArray == 2
+		t.Fatalf("Origins.InternalKind() = %d, want 2 (array)", cfg.Origins.InternalKind())
+	}
+}
+
+func TestMapstructureHookFunc_DurationFromString(t *testing.T) {
+	t.Parallel()
+	type cfgT struct {
+		Timeout *poya.DcValue[time.Duration] `mapstructure:"timeout"`
+	}
+	var cfg cfgT
+	decodeHook(t, map[string]any{"timeout": "1m30s"}, &cfg)
+
+	if cfg.Timeout == nil {
+		t.Fatal("Timeout is nil")
+	}
+	if got := cfg.Timeout.Get(); got != 90*time.Second {
+		t.Fatalf("Timeout.Get() = %v, want 1m30s", got)
+	}
+}
+
+func TestMapstructureHookFunc_ScalarFromString(t *testing.T) {
+	t.Parallel()
+	// Simulates env-style config where every value arrives as a string.
+	var cfg testConfig
+	decodeHook(t, map[string]any{
+		"host":    "api.example.com",
+		"port":    "8443",
+		"verbose": "true",
+	}, &cfg)
+
+	if got := cfg.Port.Get(); got != 8443 {
+		t.Fatalf("Port.Get() = %d, want 8443", got)
+	}
+	if got := cfg.Verbose.Get(); got != true {
+		t.Fatalf("Verbose.Get() = %v, want true", got)
+	}
+	if got := cfg.Host.Get(); got != "api.example.com" {
+		t.Fatalf("Host.Get() = %q, want api.example.com", got)
+	}
+}
+
+func TestStringToDcValueHookFunc_Standalone(t *testing.T) {
+	t.Parallel()
+	hook := hooks.StringToDcValueHookFunc()
+	var cfg testConfig
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		DecodeHook: hook,
+		Result:     &cfg,
+	})
+	if err != nil {
+		t.Fatalf("NewDecoder error: %v", err)
+	}
+	if err = decoder.Decode(map[string]any{"port": "9090"}); err != nil {
+		t.Fatalf("Decode error: %v", err)
+	}
+	if cfg.Port == nil || cfg.Port.Get() != 9090 {
+		t.Fatalf("Port.Get() = %v, want 9090", cfg.Port)
+	}
+}
+
+func TestJSONStringHookFunc_StructAndSlice(t *testing.T) {
+	t.Parallel()
+	type cfgT struct {
+		DB      *poya.DcValue[dbConfig] `mapstructure:"db"`
+		Origins *poya.DcValue[[]string] `mapstructure:"origins"`
+	}
+	hook := hooks.JSONStringHookFunc()
+	var cfg cfgT
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		DecodeHook: hook,
+		Result:     &cfg,
+	})
+	if err != nil {
+		t.Fatalf("NewDecoder error: %v", err)
+	}
+	err = decoder.Decode(map[string]any{
+		"db":      `{"host":"localhost","port":5432}`,
+		"origins": `["https://a.com"]`,
+	})
+	if err != nil {
+		t.Fatalf("Decode error: %v", err)
+	}
+	if got := cfg.DB.Get(); got.Host != "localhost" || got.Port != 5432 {
+		t.Fatalf("DB.Get() = %+v, want {localhost 5432}", got)
+	}
+	if got := cfg.Origins.Get(); len(got) != 1 || got[0] != "https://a.com" {
+		t.Fatalf("Origins.Get() = %v, want [https://a.com]", got)
+	}
+}
+
 func TestHookThenRegisterConfig_StructT(t *testing.T) {
 	t.Parallel()
 	type DBConfig struct {

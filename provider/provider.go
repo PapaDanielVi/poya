@@ -1,7 +1,10 @@
 // Package provider defines the Provider interface for configuration backends.
 package provider
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // Provider is the interface that all config backends must implement.
 // Each provider decides its own strategy for watching changes:
@@ -21,4 +24,25 @@ type Provider interface {
 
 	// Close releases any resources held by the provider.
 	Close() error
+}
+
+// CommonPrefix returns the longest common prefix shared by all the given keys.
+// Providers use it to watch every registered key with a single prefix-scoped
+// operation (an etcd prefix watch, a Redis keyspace subscription, a SQL LIKE
+// query) instead of one operation per key. It returns an empty string when the
+// keys share no common prefix.
+func CommonPrefix(keys []string) string {
+	if len(keys) == 0 {
+		return ""
+	}
+	prefix := keys[0]
+	for _, k := range keys[1:] {
+		for !strings.HasPrefix(k, prefix) {
+			if prefix == "" {
+				return ""
+			}
+			prefix = prefix[:len(prefix)-1]
+		}
+	}
+	return prefix
 }

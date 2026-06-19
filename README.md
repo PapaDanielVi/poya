@@ -14,8 +14,8 @@
 - **Type-safe generics** — `DcValue[string]`, `DcValue[int]`, `DcValue[YourConfig]`, any type you need
 - **Scalar, struct, and array values** — a single `DcValue[T]` type handles all three; scalars are parsed via type switch, structs and arrays are JSON-decoded automatically
 - **Declarative config structs** — define your entire config layout in a single struct with tags; poya discovers and registers all fields via reflection
-- **Multiple providers** — etcd (prefix watch API), Redis (batch polling), HashiCorp Vault (KV v2 polling), MySQL (batch polling), PostgreSQL (batch polling), File (fsnotify / fsevents)
-- **Efficient watching** — etcd uses a single prefix watch for all keys; polling providers fetch all keys in one batch per cycle; the SDK runs one goroutine per provider, not per key
+- **Multiple providers** — etcd (prefix watch API), Redis (keyspace notifications), HashiCorp Vault (single KV v2 secret), MySQL (batch polling), PostgreSQL (batch polling), File (fsnotify / fsevents)
+- **Efficient watching** — every provider watches all keys with one prefix-scoped operation and one goroutine, never per key: etcd uses a single prefix watch, Redis a single keyspace subscription, SQL a single batched query per cycle. Current values load on start, so reads never sit at their defaults.
 - **Lock-free reads** — `Get()` uses `atomic.Value` for zero-contention reads on the hot path
 - **Pluggable metrics** — Prometheus (default), OpenTelemetry, or inject your own implementation
 - **Structured logging** — inject any logger; defaults to stderr via `log/slog`
@@ -47,8 +47,7 @@ import (
 func main() {
 	// 1. Create a provider
 	rdb := redis.New(redis.Config{
-		Addr:         "localhost:6379",
-		PollInterval: 5 * time.Second,
+		Addr: "localhost:6379",
 	})
 
 	// 2. Create the SDK
@@ -308,14 +307,17 @@ sdk := poya.New(poya.Config{Provider: etcdProvider, Prefix: "myapp/"})
 
 ### Redis
 
-Polls at a configurable interval. Best for simple setups without etcd:
+Watches every key under their common prefix with a single keyspace-notification
+subscription, so changes arrive as events. The provider enables keyspace
+notifications on the server itself. Set `ResyncInterval` to also re-read all keys
+on a timer as a safety net against missed notifications:
 
 ```go
 rdb := redis.New(redis.Config{
-	Addr:         "localhost:6379",
-	Password:     "",       // no auth
-	DB:           0,
-	PollInterval: 5 * time.Second,
+	Addr:           "localhost:6379",
+	Password:       "",  // no auth
+	DB:             0,
+	ResyncInterval: 0,   // optional; 0 means event-driven only
 })
 defer rdb.Close()
 
@@ -324,7 +326,9 @@ sdk := poya.New(poya.Config{Provider: rdb, Prefix: "myapp/"})
 
 ### HashiCorp Vault
 
-Polls the KV v2 secrets engine. The key is the secret path within the mount:
+Stores the whole config in one KV v2 secret at the keys' common prefix, one field
+per key, so a single read per poll cycle covers every key. With `Prefix: "myapp/"`
+the secret lives at `<mount>/myapp` with fields named after each key:
 
 ```go
 v, err := vault.New(vault.Config{

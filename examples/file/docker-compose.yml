@@ -1,14 +1,23 @@
-# Docker Compose for File provider example
+# Docker Compose for the File provider example.
 #
-# The file provider watches a local file — no external backend needed.
-# This compose file simply creates the initial config file.
+# The file provider watches a local file, so no real backend is needed. This
+# compose file just writes the initial /tmp/checkout-config.json.
 #
 # Usage:
-#   docker compose up -d   # creates /tmp/config.json
+#   docker compose up -d   # writes /tmp/checkout-config.json
 #   go run main.go
 #
 # While running, edit the file to see live updates:
-#   echo '{"timeout":"60s","verbose":false,"max_conn":200}' > /tmp/config.json
+#   cat > /tmp/checkout-config.json <<'JSON'
+#   {
+#     "log_level": "debug",
+#     "request_timeout": "45s",
+#     "rate_limit_rps": 500,
+#     "maintenance_mode": true,
+#     "database": {"host": "db.prod", "port": 6543, "max_open_conns": 50},
+#     "allowed_origins": ["https://app.example.com", "https://admin.example.com"]
+#   }
+#   JSON
 #
 # Tear down:
 #   docker compose down
@@ -21,4 +30,4 @@ services:
         source: /tmp
         target: /tmp
     command: >
-      sh -c "echo '{\"timeout\":\"30s\",\"verbose\":true,\"max_conn\":100}' > /tmp/config.json"
+      sh -c "echo '{\"log_level\":\"info\",\"request_timeout\":\"30s\",\"rate_limit_rps\":100,\"maintenance_mode\":false,\"database\":{\"host\":\"db.internal\",\"port\":5432,\"max_open_conns\":20},\"allowed_origins\":[\"https://app.example.com\"]}' > /tmp/checkout-config.json"

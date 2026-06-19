@@ -1,11 +1,13 @@
 // Package vault implements the provider.Provider interface for HashiCorp Vault KV v2 backends.
-// It polls Vault secrets at a configurable interval to sync dynamic configuration and feature flags.
-// All keys are fetched in a single goroutine per poll cycle for efficiency.
+// Every registered key is read as a field of a single KV secret located at the keys' common
+// prefix, so one Vault read per poll cycle covers all keys instead of one read per key.
+// Vault has no native watch API, so changes are discovered by polling at a configurable interval.
 package vault
 
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/PapaDanielVi/poya/provider"
@@ -16,14 +18,14 @@ var _ provider.Provider = (*Provider)(nil)
 
 // Config holds Vault-specific configuration.
 type Config struct {
-	Address      string        // Vault address, e.g. "http://localhost:8200"
-	Token        string        // Vault token for authentication
-	PollInterval time.Duration // how often to check for changes
-	MountPath    string        // KV secrets engine mount path, e.g. "secret"
+	Address      string        // Vault address, e.g. "http://localhost:8200".
+	Token        string        // Vault token for authentication.
+	PollInterval time.Duration // how often to check for changes.
+	MountPath    string        // KV secrets engine mount path, e.g. "secret".
 }
 
-// Provider implements the poya Provider interface using Vault's KV secrets engine.
-// All keys are fetched in a single goroutine per poll cycle.
+// Provider implements the poya Provider interface using Vault's KV v2 secrets engine.
+// All keys are read from one secret per poll cycle.
 type Provider struct {
 	client       *vault.Client
 	pollInterval time.Duration
@@ -56,59 +58,84 @@ func New(cfg Config) (*Provider, error) {
 	}, nil
 }
 
-// Get retrieves the current value for a key from Vault.
-// The key is treated as a path within the configured KV mount.
-// For KV v2, the path is prefixed with "data/" automatically.
-func (p *Provider) Get(ctx context.Context, key string) (string, error) {
-	secret, err := p.client.KVv2(p.mountPath).Get(ctx, key)
-	if err != nil {
-		return "", fmt.Errorf("failed to read from vault: %w", err)
+// splitKey splits a full key into the secret path and the field name within
+// that secret. For "myapp/timeout" it returns ("myapp", "timeout"). A key with
+// no slash is treated as a field at the mount root.
+func splitKey(key string) (path, field string) {
+	if idx := strings.LastIndexByte(key, '/'); idx >= 0 {
+		return key[:idx], key[idx+1:]
 	}
-	if secret == nil || secret.Data == nil {
-		return "", nil
-	}
-	for _, v := range secret.Data {
-		if s, ok := v.(string); ok {
-			return s, nil
-		}
-	}
-	return "", nil
+	return "", key
 }
 
-// Watch polls all keys at the configured interval in a single goroutine.
-// When any value changes, onChange is called with the key and new value.
+// readSecret reads the KV v2 secret at path and returns its fields as strings.
+func (p *Provider) readSecret(ctx context.Context, path string) (map[string]string, error) {
+	secret, err := p.client.KVv2(p.mountPath).Get(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read from vault: %w", err)
+	}
+	out := make(map[string]string)
+	if secret == nil || secret.Data == nil {
+		return out, nil
+	}
+	for k, v := range secret.Data {
+		if s, ok := v.(string); ok {
+			out[k] = s
+		}
+	}
+	return out, nil
+}
+
+// Get retrieves the current value for a key from Vault. The key's parent path is
+// the secret path and its last segment is the field name within that secret.
+func (p *Provider) Get(ctx context.Context, key string) (string, error) {
+	path, field := splitKey(key)
+	fields, err := p.readSecret(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	return fields[field], nil
+}
+
+// Watch polls the single secret at the keys' common prefix and reports changed
+// fields. One Vault read per cycle covers every registered key.
 func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key string, value string)) error {
 	if len(keys) == 0 {
 		<-ctx.Done()
 		return nil
 	}
 
+	prefix := provider.CommonPrefix(keys)
+	secretPath := strings.TrimSuffix(prefix, "/")
+
 	ticker := time.NewTicker(p.pollInterval)
 	defer ticker.Stop()
 
 	lastValues := make(map[string]string, len(keys))
-
-	// Initial fetch for all keys
-	for _, key := range keys {
-		val, _ := p.Get(ctx, key)
-		lastValues[key] = val
-	}
+	p.poll(ctx, secretPath, prefix, keys, lastValues, onChange)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			for _, key := range keys {
-				val, err := p.Get(ctx, key)
-				if err != nil {
-					continue
-				}
-				if val != lastValues[key] {
-					lastValues[key] = val
-					onChange(key, val)
-				}
-			}
+			p.poll(ctx, secretPath, prefix, keys, lastValues, onChange)
+		}
+	}
+}
+
+// poll reads the secret once and emits any key whose field value changed.
+func (p *Provider) poll(ctx context.Context, secretPath, prefix string, keys []string, lastValues map[string]string, onChange func(key string, value string)) {
+	fields, err := p.readSecret(ctx, secretPath)
+	if err != nil {
+		return
+	}
+	for _, key := range keys {
+		field := strings.TrimPrefix(key, prefix)
+		newVal := fields[field]
+		if newVal != lastValues[key] {
+			lastValues[key] = newVal
+			onChange(key, newVal)
 		}
 	}
 }

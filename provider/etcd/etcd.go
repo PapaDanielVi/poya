@@ -61,7 +61,7 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 		return nil
 	}
 
-	prefix := commonPrefix(keys)
+	prefix := provider.CommonPrefix(keys)
 	if prefix == "" {
 		prefix = "/"
 	}
@@ -70,7 +70,19 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 		prefix += "/"
 	}
 
-	watchCh := p.client.Watch(ctx, prefix, clientv3.WithPrefix())
+	// Load the current values before watching so registered keys reflect the
+	// backend immediately instead of staying at their defaults until the next
+	// change. Watch resumes from the revision returned by the initial read so no
+	// event between the two calls is missed.
+	resp, err := p.client.Get(ctx, prefix, clientv3.WithPrefix())
+	if err != nil {
+		return err
+	}
+	for _, kv := range resp.Kvs {
+		onChange(string(kv.Key), string(kv.Value))
+	}
+
+	watchCh := p.client.Watch(ctx, prefix, clientv3.WithPrefix(), clientv3.WithRev(resp.Header.Revision+1))
 	for {
 		select {
 		case <-ctx.Done():
@@ -94,21 +106,4 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 // Close disconnects from etcd.
 func (p *Provider) Close() error {
 	return p.client.Close()
-}
-
-// commonPrefix finds the longest common prefix among a set of strings.
-func commonPrefix(strs []string) string {
-	if len(strs) == 0 {
-		return ""
-	}
-	prefix := strs[0]
-	for _, s := range strs[1:] {
-		for !strings.HasPrefix(s, prefix) {
-			if len(prefix) == 0 {
-				return ""
-			}
-			prefix = prefix[:len(prefix)-1]
-		}
-	}
-	return prefix
 }

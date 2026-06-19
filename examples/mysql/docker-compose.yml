@@ -1,21 +1,23 @@
-# Docker Compose for MySQL provider example
+# Docker Compose for the MySQL provider example (MariaDB).
 #
 # Usage:
 #   docker compose up -d
-#   # Wait for MySQL to be ready, then seed the config table:
-#   docker compose exec mysql mysql -uroot -proot -e "
-#     CREATE DATABASE IF NOT EXISTS configdb;
-#     USE configdb;
-#     CREATE TABLE IF NOT EXISTS config (
-#       config_key   VARCHAR(255) PRIMARY KEY,
-#       config_value TEXT
-#     );
-#     INSERT INTO config VALUES ('myapp/db/host', 'localhost');
-#     INSERT INTO config VALUES ('myapp/db/port', '5432');
-#     INSERT INTO config VALUES ('myapp/verbose', 'true');
-#     INSERT INTO config VALUES ('myapp/timeout', '30s');
-#   "
+#   # Wait for the database to accept connections, then seed the config table:
+#   docker compose exec -T mysql mariadb -uroot -proot configdb <<'SQL'
+#   CREATE TABLE IF NOT EXISTS config (config_key VARCHAR(255) PRIMARY KEY, config_value TEXT);
+#   REPLACE INTO config VALUES
+#     ('checkout/log_level', 'info'),
+#     ('checkout/request_timeout', '30s'),
+#     ('checkout/rate_limit_rps', '100'),
+#     ('checkout/maintenance_mode', 'false'),
+#     ('checkout/database', '{"host":"db.internal","port":5432,"max_open_conns":20}'),
+#     ('checkout/allowed_origins', '["https://app.example.com"]');
+#   SQL
 #   go run main.go
+#
+# Change a value to see the app log the event:
+#   docker compose exec -T mysql mariadb -uroot -proot configdb \
+#     -e "UPDATE config SET config_value='500' WHERE config_key='checkout/rate_limit_rps'"
 #
 # Tear down:
 #   docker compose down -v

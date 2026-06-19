@@ -1,19 +1,31 @@
-// Example: HashiCorp Vault provider
+// Example: HashiCorp Vault provider.
 //
-// Prerequisites:
-//   1. Start Vault in dev mode:
-//      docker run -d --name vault -p 8200:8200 --cap-add=IPC_LOCK vault:1.13 server -dev -dev-root-token-id=root
-//   2. Seed secrets (the key name is the secret path within the KV mount):
-//      VAULT_ADDR=http://localhost:8200 VAULT_TOKEN=root vault kv put secret/myapp/db host=localhost port=5432
-//      VAULT_ADDR=http://localhost:8200 VAULT_TOKEN=root vault kv put secret/myapp/verbose value=true
-//      VAULT_ADDR=http://localhost:8200 VAULT_TOKEN=root vault kv put secret/myapp/timeout value=30s
-//   3. Run: go run examples/vault/main.go
-//   4. In another terminal, update a secret:
-//      VAULT_ADDR=http://localhost:8200 VAULT_TOKEN=root vault kv put secret/myapp/db host=remote port=3306
-//      Watch the output — the update is reflected within the poll interval.
+// Models the runtime config of a checkout service: log level, request timeout,
+// a rate limit, a maintenance feature flag, a database connection struct, and a
+// list of allowed CORS origins. The whole config lives in a single KV v2 secret
+// at "secret/checkout", and each registered key maps to a field of that secret,
+// so one Vault read per poll cycle covers everything. Struct and array values
+// are stored as JSON strings.
+//
+// Run it end to end:
+//
+//	docker compose up -d
+//	docker compose exec vault vault kv put secret/checkout \
+//	  log_level=info \
+//	  request_timeout=30s \
+//	  rate_limit_rps=100 \
+//	  maintenance_mode=false \
+//	  database='{"host":"db.internal","port":5432,"max_open_conns":20}' \
+//	  allowed_origins='["https://app.example.com"]'
+//	go run main.go
+//
+// Then change a value and watch the app log the event:
+//
+//	docker compose exec vault vault kv patch secret/checkout rate_limit_rps=500 maintenance_mode=true
 package main
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"time"
@@ -23,16 +35,77 @@ import (
 )
 
 const (
-	pollInterval    = 10 * time.Second
-	displayInterval = 5 * time.Second
-	defaultDBPort   = 5432
-	defaultDBHost   = "localhost"
+	reportInterval = 2 * time.Second
+	pollInterval   = 2 * time.Second
+	// syncSettle gives the background watcher a moment to load current values
+	// from the backend before we snapshot the initial config.
+	syncSettle = time.Second
 )
+
+// DatabaseConfig is a struct-typed config value decoded from a JSON document.
+type DatabaseConfig struct {
+	Host         string `json:"host"`
+	Port         int    `json:"port"`
+	MaxOpenConns int    `json:"max_open_conns"`
+}
+
+// CheckoutConfig is the full runtime config, registered in one shot via RegisterConfig.
+type CheckoutConfig struct {
+	LogLevel        poya.DcValue[string]         `poya:"key=log_level"`
+	RequestTimeout  poya.DcValue[time.Duration]  `poya:"key=request_timeout"`
+	RateLimitRPS    poya.DcValue[int]            `poya:"key=rate_limit_rps"`
+	MaintenanceMode poya.DcValue[bool]           `poya:"key=maintenance_mode"`
+	Database        poya.DcValue[DatabaseConfig] `poya:"key=database"`
+	AllowedOrigins  poya.DcValue[[]string]       `poya:"key=allowed_origins"`
+}
+
+func newConfig() *CheckoutConfig {
+	return &CheckoutConfig{
+		LogLevel:        *poya.NewDcValue("info"),
+		RequestTimeout:  *poya.NewDcValue(30 * time.Second),
+		RateLimitRPS:    *poya.NewDcValue(100),
+		MaintenanceMode: *poya.NewDcValue(false),
+		Database:        *poya.NewDcValue(DatabaseConfig{Host: "localhost", Port: 5432, MaxOpenConns: 20}),
+		AllowedOrigins:  *poya.NewDcValue([]string{"https://app.example.com"}),
+	}
+}
+
+// describe renders the current config as one "key=value" line per field so the
+// loop can diff successive snapshots and log only what changed.
+func describe(cfg *CheckoutConfig) []string {
+	db := cfg.Database.Get()
+	return []string{
+		"log_level=" + cfg.LogLevel.Get(),
+		"request_timeout=" + cfg.RequestTimeout.Get().String(),
+		fmt.Sprintf("rate_limit_rps=%d", cfg.RateLimitRPS.Get()),
+		fmt.Sprintf("maintenance_mode=%v", cfg.MaintenanceMode.Get()),
+		fmt.Sprintf("database=%s:%d(max_open_conns=%d)", db.Host, db.Port, db.MaxOpenConns),
+		fmt.Sprintf("allowed_origins=%v", cfg.AllowedOrigins.Get()),
+	}
+}
+
+// watchForChanges logs every field that changes between report intervals. The
+// changes are how you confirm the app actually received a provider update.
+func watchForChanges(log *slog.Logger, cfg *CheckoutConfig) {
+	time.Sleep(syncSettle)
+	prev := describe(cfg)
+	log.Info("initial config", "values", prev)
+	for {
+		time.Sleep(reportInterval)
+		cur := describe(cfg)
+		for i := range cur {
+			if cur[i] != prev[i] {
+				log.Info("config changed", "value", cur[i])
+			}
+		}
+		prev = cur
+	}
+}
 
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
-	provider, err := vault.New(vault.Config{
+	prov, err := vault.New(vault.Config{
 		Address:      "http://localhost:8200",
 		Token:        "root",
 		MountPath:    "secret",
@@ -44,35 +117,16 @@ func main() {
 	}
 
 	sdk := poya.New(poya.Config{
-		Provider: provider,
-		Prefix:   "myapp/",
+		Provider: prov,
+		Prefix:   "checkout/",
 	})
 
-	timeout := poya.NewDcValue("30s")
-	verbose := poya.NewDcValue(false)
-	poya.Register(sdk, "timeout", timeout)
-	poya.Register(sdk, "verbose", verbose)
-
-	type DBConfig struct {
-		Host poya.DcValue[string] `poya:"key=host"`
-		Port poya.DcValue[int]    `poya:"key=port"`
-	}
-	cfg := DBConfig{
-		Host: *poya.NewDcValue(defaultDBHost),
-		Port: *poya.NewDcValue(defaultDBPort),
-	}
-	poya.RegisterConfig(sdk, &cfg)
+	cfg := newConfig()
+	poya.RegisterConfig(sdk, cfg)
 
 	sdk.Start()
 	defer sdk.Stop()
 
-	log.Info("Polling Vault every 10s — update secrets to see changes reflected.")
-	for {
-		log.Info("current config",
-			"timeout", timeout.Get(),
-			"verbose", verbose.Get(),
-			"db.host", cfg.Host.Get(),
-			"db.port", cfg.Port.Get())
-		time.Sleep(displayInterval)
-	}
+	log.Info("watching Vault secret/checkout — patch a field to see the event")
+	watchForChanges(log, cfg)
 }

@@ -1,61 +1,130 @@
-// Example: File provider
+// Example: File provider.
 //
-// Prerequisites:
-//   1. Create a config file (JSON or YAML) in the current directory:
+// Models the runtime config of a checkout service in a local JSON file: log
+// level, request timeout, a rate limit, a maintenance feature flag, a database
+// connection struct, and a list of allowed CORS origins. The file provider
+// watches the file with fsnotify and re-reads it on every change. Nested objects
+// and arrays are decoded into struct and array config values.
 //
-//      echo '{"timeout":"30s","verbose":true,"max_conn":100}' > /tmp/config.json
+// Run it end to end:
 //
-//      // or for YAML:
-//      cat > /tmp/config.yaml <<'YAML'
-//      timeout: 30s
-//      verbose: true
-//      max_conn: 100
-//      YAML
+//	docker compose up -d   # writes /tmp/checkout-config.json
+//	go run main.go
 //
-//   2. Update the path below to point to your file.
-//   3. Run: go run examples/file/main.go
-//   4. In another terminal, edit the file:
-//      echo '{"timeout":"60s","verbose":false,"max_conn":200}' > /tmp/config.json
-//      Watch the output — the update is reflected almost instantly.
+// Then edit the file and watch the app log the event:
+//
+//	cat > /tmp/checkout-config.json <<'JSON'
+//	{
+//	  "log_level": "debug",
+//	  "request_timeout": "45s",
+//	  "rate_limit_rps": 500,
+//	  "maintenance_mode": true,
+//	  "database": {"host": "db.prod", "port": 6543, "max_open_conns": 50},
+//	  "allowed_origins": ["https://app.example.com", "https://admin.example.com"]
+//	}
+//	JSON
 package main
 
 import (
-	"log"
+	"fmt"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/PapaDanielVi/poya"
 	"github.com/PapaDanielVi/poya/provider/file"
 )
 
-const pollInterval = 5 * time.Second
+const (
+	reportInterval = 2 * time.Second
+	configPath     = "/tmp/checkout-config.json"
+	// syncSettle gives the background watcher a moment to load current values
+	// from the backend before we snapshot the initial config.
+	syncSettle = time.Second
+)
+
+// DatabaseConfig is a struct-typed config value decoded from a JSON object.
+type DatabaseConfig struct {
+	Host         string `json:"host"`
+	Port         int    `json:"port"`
+	MaxOpenConns int    `json:"max_open_conns"`
+}
+
+// CheckoutConfig is the full runtime config, registered in one shot via RegisterConfig.
+type CheckoutConfig struct {
+	LogLevel        poya.DcValue[string]         `poya:"key=log_level"`
+	RequestTimeout  poya.DcValue[time.Duration]  `poya:"key=request_timeout"`
+	RateLimitRPS    poya.DcValue[int]            `poya:"key=rate_limit_rps"`
+	MaintenanceMode poya.DcValue[bool]           `poya:"key=maintenance_mode"`
+	Database        poya.DcValue[DatabaseConfig] `poya:"key=database"`
+	AllowedOrigins  poya.DcValue[[]string]       `poya:"key=allowed_origins"`
+}
+
+func newConfig() *CheckoutConfig {
+	return &CheckoutConfig{
+		LogLevel:        *poya.NewDcValue("info"),
+		RequestTimeout:  *poya.NewDcValue(30 * time.Second),
+		RateLimitRPS:    *poya.NewDcValue(100),
+		MaintenanceMode: *poya.NewDcValue(false),
+		Database:        *poya.NewDcValue(DatabaseConfig{Host: "localhost", Port: 5432, MaxOpenConns: 20}),
+		AllowedOrigins:  *poya.NewDcValue([]string{"https://app.example.com"}),
+	}
+}
+
+// describe renders the current config as one "key=value" line per field so the
+// loop can diff successive snapshots and log only what changed.
+func describe(cfg *CheckoutConfig) []string {
+	db := cfg.Database.Get()
+	return []string{
+		"log_level=" + cfg.LogLevel.Get(),
+		"request_timeout=" + cfg.RequestTimeout.Get().String(),
+		fmt.Sprintf("rate_limit_rps=%d", cfg.RateLimitRPS.Get()),
+		fmt.Sprintf("maintenance_mode=%v", cfg.MaintenanceMode.Get()),
+		fmt.Sprintf("database=%s:%d(max_open_conns=%d)", db.Host, db.Port, db.MaxOpenConns),
+		fmt.Sprintf("allowed_origins=%v", cfg.AllowedOrigins.Get()),
+	}
+}
+
+// watchForChanges logs every field that changes between report intervals. The
+// changes are how you confirm the app actually received a file update.
+func watchForChanges(log *slog.Logger, cfg *CheckoutConfig) {
+	time.Sleep(syncSettle)
+	prev := describe(cfg)
+	log.Info("initial config", "values", prev)
+	for {
+		time.Sleep(reportInterval)
+		cur := describe(cfg)
+		for i := range cur {
+			if cur[i] != prev[i] {
+				log.Info("config changed", "value", cur[i])
+			}
+		}
+		prev = cur
+	}
+}
 
 func main() {
-	provider, err := file.New(file.Config{
-		Path: "/tmp/config.json",
-		// Format: file.FormatAuto, // auto-detects from .json / .yaml / .yml
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	prov, err := file.New(file.Config{
+		Path: configPath, // format auto-detected from the .json extension
 	})
 	if err != nil {
-		log.Fatal(err)
+		log.Error("failed to create file provider", "error", err)
+		os.Exit(1)
 	}
+	defer prov.Close() //nolint:errcheck,nolintlint
 
 	sdk := poya.New(poya.Config{
-		Provider: provider,
+		Provider: prov,
 	})
 
-	timeout := poya.NewDcValue("30s")
-	verbose := poya.NewDcValue(false)
-	maxConn := poya.NewDcValue(0)
-	poya.Register(sdk, "timeout", timeout)
-	poya.Register(sdk, "verbose", verbose)
-	poya.Register(sdk, "max_conn", maxConn)
+	cfg := newConfig()
+	poya.RegisterConfig(sdk, cfg)
 
 	sdk.Start()
 	defer sdk.Stop()
 
-	log.Println("Watching /tmp/config.json for changes — edit the file to see updates.")
-	for {
-		log.Printf("  timeout=%s  verbose=%v  max_conn=%d\n",
-			timeout.Get(), verbose.Get(), maxConn.Get())
-		time.Sleep(pollInterval)
-	}
+	log.Info("watching " + configPath + " — edit the file to see the event")
+	watchForChanges(log, cfg)
 }
