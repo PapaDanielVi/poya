@@ -510,8 +510,16 @@ func TestCustomMetricsReceiveEvents(t *testing.T) {
 	}
 }
 
+// logLevel is a named scalar type used to verify that parseValue round-trips
+// custom types whose underlying kind is a basic type.
+type logLevel int
+
 func TestParseValue(t *testing.T) {
 	t.Parallel()
+	refTime, err := time.Parse(time.RFC3339, "2026-01-02T15:04:05Z")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 	tests := []struct {
 		raw  string
 		def  any
@@ -537,17 +545,57 @@ func TestParseValue(t *testing.T) {
 		{"1m30s", time.Duration(0), 90 * time.Second},
 		{"500ms", time.Duration(0), 500 * time.Millisecond},
 		{"hello", []byte{}, []byte("hello")},
+		// Named scalar type round-trips to its own type, not the underlying int.
+		{"3", logLevel(0), logLevel(3)},
+		// time.Time parses from RFC3339.
+		{"2026-01-02T15:04:05Z", time.Time{}, refTime},
+		// Complex numbers.
+		{"1+2i", complex128(0), complex(1.0, 2.0)},
+		{"3-4i", complex64(0), complex64(complex(3.0, -4.0))},
 	}
 
 	for _, tt := range tests {
-		got, err := parseValue(tt.raw, tt.def)
-		if err != nil {
-			t.Errorf("parseValue(%q, %v) error: %v", tt.raw, tt.def, err)
+		got, parseErr := parseValue(tt.raw, tt.def)
+		if parseErr != nil {
+			t.Errorf("parseValue(%q, %v) error: %v", tt.raw, tt.def, parseErr)
 			continue
 		}
 		if !reflect.DeepEqual(got, tt.want) {
 			t.Errorf("parseValue(%q, %v) = %v, want %v", tt.raw, tt.def, got, tt.want)
 		}
+	}
+}
+
+func TestParseValueInvalidReturnsError(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		raw string
+		def any
+	}{
+		{"not-a-number", 0},
+		{"abc", float64(0)},
+		{"maybe", false},
+		{"300", int8(0)}, // out of range for int8.
+	}
+	for _, tt := range tests {
+		if _, err := parseValue(tt.raw, tt.def); err == nil {
+			t.Errorf("parseValue(%q, %v) expected error, got nil", tt.raw, tt.def)
+		}
+	}
+}
+
+func TestDisabledSDK(t *testing.T) {
+	t.Parallel()
+	// A disabled SDK must work with a nil provider: it never connects or watches.
+	sdk := New(Config{Disabled: true})
+	val := NewDcValue("default")
+	Register(sdk, "mykey", val)
+
+	sdk.Start()
+	defer sdk.Stop()
+
+	if got := val.Get(); got != "default" {
+		t.Errorf("disabled SDK Get() = %v, want default", got)
 	}
 }
 

@@ -10,8 +10,8 @@ Poya is a dynamic config SDK for Go. Developers register typed config values (`D
 DcValue[T]  → unified type: scalars parsed via type switch, structs JSON-decoded
 entry       → internal type-erased wrapper holding atomic.Value + entryKind
 Metrics     → interface with Prometheus/otel backends and NoopMetrics stub
-Logger      → interface with Debug/Info/Warn/Error (slog-based default, noop stub)
-Provider    → interface with etcd (prefix watch), Redis/Vault/MySQL/PostgreSQL (batch poll), File (fsnotify)
+Logger      → interface with Debug/Info/Warn/Error (slog default, noop stub, zap/logrus/zerolog adapters)
+Provider    → interface with etcd (prefix watch), Redis (keyspace notifications), Vault/MySQL/PostgreSQL (batch poll), File (fsnotify). Network providers take a fully-configured native client (BYO client) and reconnect with backoff.
 ```
 
 Key types:
@@ -125,7 +125,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ### Lint Fixes (golangci-lint)
 - **`errcheck` fixes**: Added `//nolint:errcheck` to deferred `Close()` calls where errors are intentionally ignored (common pattern for cleanup).
-- **`funlen` fix**: Refactored `parseValue` into `parseSigned`/`parseUnsigned` helpers to reduce statement count below 50.
+- **`funlen` fix**: `parseValue` delegates to `parseTextUnmarshaler` and `parseByKind` helpers to keep each function short.
 - **`gocognit` fixes**: Extracted `calcNestedPrefix` helper from `registerConfig` and `initialFetch`/`pollOnce` helpers from Redis `Watch` to reduce cognitive complexity.
 - **`govet` fix**: Avoided `else if` with short variable declarations (not supported in Go 1.21), refactored to separate `if` blocks with `continue`.
 - **`modernize` fix**: Added `//nolint:modernize` to goroutine creation (standard `sync.WaitGroup` pattern is acceptable).
@@ -138,3 +138,31 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 	- PostgreSQL: `postgres:18.4`
 	- Redis: `redis:8.2.6`
 	- Vault: `hashicorp/vault:2.0`
+
+### Disable Switch
+- **`Config.Disabled bool` turns the SDK off.** When set, `New` does not require a provider (it may be nil), `Start()` is a no-op that never connects or watches, and every registered `DcValue` keeps its default via `Get()`. `Stop()` stays safe. The flag is stored on `SDK.disabled` and checked at the top of `Start()`.
+
+### BYO-Client Providers (breaking change)
+- **Network providers take a fully-configured native client; they never build it.** `etcd.New(client *clientv3.Client)`, `redis.New(client *goredis.Client, cfg Config)`, `vault.New(client *vault.Client, cfg Config)`. The per-provider `Config` now carries only behavioral knobs (e.g. `ResyncInterval`, `PollInterval`, `MountPath`), never connection fields. Redis reads the DB number from `client.Options().DB`. MySQL/PostgreSQL already took `*sql.DB`/`Repository` (unchanged). File takes a path (no client).
+- **Examples build the client first** (`clientv3.New`, `goredis.NewClient`, `vaultapi.NewClient` + `SetToken`) then pass it in.
+
+### Per-Provider Reconnect + Backoff
+- **Shared backoff lives in `provider/backoff.go`**: `Backoff(attempt)` is exponential from 500ms capped at 30s; `SleepBackoff(ctx, attempt)` waits and returns false if ctx is cancelled (use as the loop exit signal).
+- **etcd `Watch`** wraps Get + the watch channel in an outer loop, re-reading current values and re-establishing the watch on channel close/error (`drain` helper returns true only on ctx cancel). **Redis `Watch`** re-subscribes via `subscribeOnce`, persisting `lastValues` across reconnects so only real changes re-emit. **File `Watch`** re-adds the path/dir with backoff on watcher errors. **Polling providers** (Vault/MySQL/PostgreSQL) are already resilient: the ticker retries next cycle, errors are skipped with a comment.
+
+### Robust parseValue (reflect + strconv)
+- **`parseValue` drives off `reflect.Kind` + `strconv`, not a concrete-type switch.** This fixes a real bug: named scalar types (`type Level int`) previously fell through to the raw-string default. Special-cases `time.Duration`, `time.Time` (RFC3339), `[]byte` first; honors `encoding.TextUnmarshaler`; then parses by kind (string/bool/int*/uint*/float*/complex*) and `Convert`s back to the concrete type so `atomic.Value` type consistency holds. Helpers: `parseTextUnmarshaler`, `parseByKind`.
+
+### Logger Adapters
+- **zap/logrus/zerolog adapters live in `logger/{zap,logrus,zerolog}/`**, each exposing `New(<native logger>) logger.Logger` (BYO, same as providers). logrus/zerolog use a kv-to-fields helper that guards odd-length kv slices. `logger.NewNoop()` returns a discard logger.
+
+### Grafana Dashboard
+- **`docs/grafana/poya-dashboard.json`** charts the Prometheus metrics (`poya_watch_events_total`, `poya_watch_errors_total`, `poya_sync_update_latency_seconds`, `poya_registered_keys`) using a templated `datasource` variable so it imports cleanly.
+
+### Config-Loader Decode Hooks
+- **Two mapstructure forks, two hook packages, one shared core.** Config loaders decode into structs via mapstructure, but the ecosystem split: `github.com/mitchellh/mapstructure` (v1, archived) is used by viper < 1.18, while `github.com/go-viper/mapstructure/v2` is used by koanf v2 and viper >= 1.18. So there are two hook packages with identical APIs: `hooks` (v1) and `hooks/mapstructurev2` (v2).
+- **The shared logic lives in `hooks/internal/dchook/` and imports no mapstructure package.** Both mapstructure forks define `DecodeHookFuncValue` as `func(from, to reflect.Value) (any, error)`, the exact signature of `dchook.Hook`, `dchook.StringToDcValue`, and `dchook.JSONString`. Each public package is a thin wrapper that passes those functions to its fork's `DecodeHookFuncValue`. This is why adding the koanf/viper-v2 package was nearly free: no logic duplication.
+- **The hook's scalar parser mirrors `parseValue` in `poya.go`.** `parseScalarString` special-cases `time.Duration` and `time.Time` (RFC3339), honors `encoding.TextUnmarshaler`, then parses by `reflect.Kind` via `strconv` and `Convert`s back so named types round-trip. It does not special-case `[]byte`: a `DcValue[[]byte]` has `reflect.Slice` kind, so it is `EntryKindArray` and goes through the JSON path, never the scalar parser.
+- **Hooks set the kind via `SetDefaultAndValue` and structs/slices via `InternalSetJSON`** (both exported reflection-visible methods on `DcValue`). For a struct/slice source the hook JSON-marshals the decoded map/slice, then calls `InternalSetJSON`; this keeps the atomic.Value's concrete type correct.
+- **Tag-based loaders (caarlos0/env, envconfig) have no decode-hook seam**, so they can't be supported this way. Only mapstructure-based loaders (viper, koanf, OTel Collector) plug in. Don't fabricate hooks for the others.
+- **Do not import koanf or viper into the module.** The v2 package depends only on `github.com/go-viper/mapstructure/v2` and is tested by decoding through that fork directly (which is exactly what koanf/viper do internally). This keeps poya's go.mod lean for downstream consumers; README shows the koanf/viper call sites.

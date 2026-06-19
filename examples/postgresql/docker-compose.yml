@@ -1,19 +1,19 @@
-# Docker Compose for PostgreSQL provider example
+# Docker Compose for the PostgreSQL provider example.
 #
 # Usage:
 #   docker compose up -d
-#   # Wait for PostgreSQL to be ready, then seed the config table:
-#   docker compose exec postgres psql -U postgres -d configdb -c "
-#     CREATE TABLE IF NOT EXISTS config (
-#       config_key   VARCHAR(255) PRIMARY KEY,
-#       config_value TEXT
-#     );
-#     INSERT INTO config VALUES ('myapp/db/host', 'localhost');
-#     INSERT INTO config VALUES ('myapp/db/port', '5432');
-#     INSERT INTO config VALUES ('myapp/verbose', 'true');
-#     INSERT INTO config VALUES ('myapp/timeout', '30s')
-#     ON CONFLICT (config_key) DO NOTHING;
-#   "
+#   # Wait for PostgreSQL to accept connections, then seed the config table:
+#   docker compose exec -T postgres psql -U postgres -d configdb <<'SQL'
+#   CREATE TABLE IF NOT EXISTS config (config_key VARCHAR(255) PRIMARY KEY, config_value TEXT);
+#   INSERT INTO config VALUES
+#     ('checkout/log_level', 'info'),
+#     ('checkout/request_timeout', '30s'),
+#     ('checkout/rate_limit_rps', '100'),
+#     ('checkout/maintenance_mode', 'false'),
+#     ('checkout/database', '{"host":"db.internal","port":5432,"max_open_conns":20}'),
+#     ('checkout/allowed_origins', '["https://app.example.com"]')
+#   ON CONFLICT (config_key) DO UPDATE SET config_value = EXCLUDED.config_value;
+#   SQL
 #   go run main.go
 #
 # Tear down:
@@ -28,7 +28,9 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      # postgres:18+ stores data under /var/lib/postgresql/<version>/docker, so
+      # the volume must be mounted at the parent dir, not /var/lib/postgresql/data.
+      - postgres-data:/var/lib/postgresql
 
 volumes:
   postgres-data:

@@ -109,6 +109,11 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 		return fmt.Errorf("file provider: failed to watch directory: %w", addErr)
 	}
 
+	// Emit the values already loaded from the file so registered keys reflect it
+	// immediately instead of staying at their defaults until the first edit.
+	p.emitAll(keys, onChange)
+
+	attempt := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -125,29 +130,42 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 				// Small delay to let the writer finish.
 				time.Sleep(50 * time.Millisecond) //nolint:mnd // delay for atomic write completion
 				p.detectChanges(keys, onChange)
+				// A healthy event means the watch recovered; reset the backoff.
+				attempt = 0
 			}
 		case watchErr, ok := <-watcher.Errors:
 			if !ok {
 				return nil
 			}
-			// Silently continue on watch errors; the file may be temporarily unavailable.
+			// The watch errored (the file may be temporarily unavailable). Back off,
+			// then re-add the file and its directory so the watch recovers instead of
+			// going silently dead.
 			_ = watchErr
+			if !provider.SleepBackoff(ctx, attempt) {
+				return nil
+			}
+			attempt++
+			_ = watcher.Add(p.path) //nolint:errcheck // best-effort re-add; next error retries.
+			_ = watcher.Add(dir)    //nolint:errcheck // best-effort re-add; next error retries.
 		}
 	}
 }
 
-// detectChanges reloads the file and calls onChange for any changed values.
+// detectChanges reloads the file and calls onChange for every key.
 func (p *Provider) detectChanges(keys []string, onChange func(key string, value string)) {
 	if err := p.load(); err != nil {
 		return
 	}
+	p.emitAll(keys, onChange)
+}
 
+// emitAll calls onChange with the currently loaded value of every key.
+func (p *Provider) emitAll(keys []string, onChange func(key string, value string)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	for _, key := range keys {
-		newVal := p.values[key]
-		onChange(key, newVal)
+		onChange(key, p.values[key])
 	}
 }
 
@@ -174,10 +192,12 @@ func (p *Provider) load() error {
 		return fmt.Errorf("unknown format: %v", p.format)
 	}
 
-	// Convert all values to strings (flat key:value only, no nesting).
+	// Convert each value to a string. Scalars become their plain textual form;
+	// objects and arrays are re-encoded as JSON so struct and array DcValues
+	// decode them correctly.
 	newValues := make(map[string]string, len(raw))
 	for k, v := range raw {
-		newValues[k] = fmt.Sprintf("%v", v)
+		newValues[k] = stringifyValue(v)
 	}
 
 	p.mu.Lock()
@@ -185,6 +205,47 @@ func (p *Provider) load() error {
 	p.mu.Unlock()
 
 	return nil
+}
+
+// stringifyValue renders a decoded JSON/YAML value as the raw string the SDK
+// expects. Scalars use their plain textual form; objects and arrays are
+// re-encoded as JSON so struct and array DcValues unmarshal them correctly.
+func stringifyValue(v any) string {
+	switch v.(type) {
+	case map[string]any, []any, map[any]any:
+		if b, err := json.Marshal(normalizeYAML(v)); err == nil {
+			return string(b)
+		}
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+// normalizeYAML converts map[any]any values produced by the YAML decoder into
+// map[string]any so they can be JSON-encoded. It recurses through nested maps
+// and slices.
+func normalizeYAML(v any) any {
+	switch val := v.(type) {
+	case map[any]any:
+		m := make(map[string]any, len(val))
+		for k, item := range val {
+			m[fmt.Sprintf("%v", k)] = normalizeYAML(item)
+		}
+		return m
+	case map[string]any:
+		m := make(map[string]any, len(val))
+		for k, item := range val {
+			m[k] = normalizeYAML(item)
+		}
+		return m
+	case []any:
+		s := make([]any, len(val))
+		for i, item := range val {
+			s[i] = normalizeYAML(item)
+		}
+		return s
+	default:
+		return v
+	}
 }
 
 // Close releases file provider resources.

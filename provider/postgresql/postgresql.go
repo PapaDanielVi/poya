@@ -9,7 +9,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"maps"
 	"strings"
 	"time"
 
@@ -79,7 +78,7 @@ func (r *DefaultRepository) GetAll(ctx context.Context, keys []string) (map[stri
 	}
 	//nolint:gosec // G201: table/column names are config-driven, not user input
 	query := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s IN (%s)",
-			r.keyColumn, r.valueColumn, r.tableName, r.keyColumn, strings.Join(placeholders, ","))
+		r.keyColumn, r.valueColumn, r.tableName, r.keyColumn, strings.Join(placeholders, ","))
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("postgresql repository get all: %w", err)
@@ -198,28 +197,35 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 	ticker := time.NewTicker(p.pollInterval)
 	defer ticker.Stop()
 
+	// lastValues starts empty so the first poll emits every current value,
+	// loading the backend state instead of leaving keys at their defaults.
 	lastValues := make(map[string]string, len(keys))
-
-	// Initial fetch
-	vals, _ := p.repo.GetAll(ctx, keys)
-	maps.Copy(lastValues, vals)
+	p.poll(ctx, keys, lastValues, onChange)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			pollVals, err := p.repo.GetAll(ctx, keys)
-			if err != nil {
-				continue
-			}
-			for _, key := range keys {
-				newVal := pollVals[key]
-				if newVal != lastValues[key] {
-					lastValues[key] = newVal
-					onChange(key, newVal)
-				}
-			}
+			p.poll(ctx, keys, lastValues, onChange)
+		}
+	}
+}
+
+// poll fetches all keys in one query and emits any whose value changed since the
+// last cycle. An empty lastValues makes it emit every current value.
+func (p *Provider) poll(ctx context.Context, keys []string, lastValues map[string]string, onChange func(key string, value string)) {
+	pollVals, err := p.repo.GetAll(ctx, keys)
+	if err != nil {
+		// Skip this cycle; the ticker retries on the next interval, so a transient
+		// database outage self-heals without tearing down the watch.
+		return
+	}
+	for _, key := range keys {
+		newVal := pollVals[key]
+		if newVal != lastValues[key] {
+			lastValues[key] = newVal
+			onChange(key, newVal)
 		}
 	}
 }

@@ -1,12 +1,20 @@
-# Docker Compose for Redis provider example
+# Docker Compose for the Redis provider example.
+#
+# The provider enables keyspace notifications itself, so no extra Redis config
+# is needed; changes are delivered as events rather than discovered by polling.
 #
 # Usage:
 #   docker compose up -d
-#   docker compose exec redis redis-cli SET myapp/db/host localhost
-#   docker compose exec redis redis-cli SET myapp/db/port 5432
-#   docker compose exec redis redis-cli SET myapp/verbose true
-#   docker compose exec redis redis-cli SET myapp/timeout 30s
+#   docker compose exec redis redis-cli SET checkout/log_level info
+#   docker compose exec redis redis-cli SET checkout/request_timeout 30s
+#   docker compose exec redis redis-cli SET checkout/rate_limit_rps 100
+#   docker compose exec redis redis-cli SET checkout/maintenance_mode false
+#   docker compose exec redis redis-cli SET checkout/database '{"host":"db.internal","port":5432,"max_open_conns":20}'
+#   docker compose exec redis redis-cli SET checkout/allowed_origins '["https://app.example.com"]'
 #   go run main.go
+#
+# Change a value to see the app log the event:
+#   docker compose exec redis redis-cli SET checkout/rate_limit_rps 500
 #
 # Tear down:
 #   docker compose down -v

@@ -14,11 +14,16 @@
 - **Type-safe generics** — `DcValue[string]`, `DcValue[int]`, `DcValue[YourConfig]`, any type you need
 - **Scalar, struct, and array values** — a single `DcValue[T]` type handles all three; scalars are parsed via type switch, structs and arrays are JSON-decoded automatically
 - **Declarative config structs** — define your entire config layout in a single struct with tags; poya discovers and registers all fields via reflection
-- **Multiple providers** — etcd (prefix watch API), Redis (batch polling), HashiCorp Vault (KV v2 polling), MySQL (batch polling), PostgreSQL (batch polling), File (fsnotify / fsevents)
-- **Efficient watching** — etcd uses a single prefix watch for all keys; polling providers fetch all keys in one batch per cycle; the SDK runs one goroutine per provider, not per key
+- **Multiple providers** — etcd (prefix watch API), Redis (keyspace notifications), HashiCorp Vault (single KV v2 secret), MySQL (batch polling), PostgreSQL (batch polling), File (fsnotify / fsevents)
+- **Efficient watching** — every provider watches all keys with one prefix-scoped operation and one goroutine, never per key: etcd uses a single prefix watch, Redis a single keyspace subscription, SQL a single batched query per cycle. Current values load on start, so reads never sit at their defaults.
+- **Bring your own client** — each provider takes a fully-configured backend client (etcd, go-redis, Vault, `*sql.DB`), so you control every connection option: TLS, auth, pool sizing, timeouts
+- **Resilient watching** — providers reconnect after network failures with exponential backoff and re-read current values, so a dropped connection self-heals without restarting your app
+- **Switchable off** — set `Config.Disabled` to skip all connections and watching; every value stays at its default, so you can ship one binary with dynamic config on or off
 - **Lock-free reads** — `Get()` uses `atomic.Value` for zero-contention reads on the hot path
-- **Pluggable metrics** — Prometheus (default), OpenTelemetry, or inject your own implementation
-- **Structured logging** — inject any logger; defaults to stderr via `log/slog`
+- **Pluggable metrics** — Prometheus (default), OpenTelemetry, or inject your own implementation, plus a ready-made Grafana dashboard
+- **Structured logging** — defaults to stderr via `log/slog`, with ready-made adapters for zap, logrus, and zerolog, or inject your own
+- **Config-loader hooks** — decode hooks seed `DcValue` defaults from your existing config files; works with viper (both mapstructure forks) and koanf v2
+- **Wide type support** — every Go scalar kind (including named types like `type Level int`), `time.Duration`, `time.Time`, `[]byte`, and `encoding.TextUnmarshaler` types parse from provider strings; structs and slices decode from JSON
 - **Prefix & nesting** — hierarchical key management with automatic prefix accumulation for nested structs
 - **Graceful shutdown** — context-based cancellation cleans up all background goroutines
 
@@ -42,14 +47,13 @@ import (
 
 	"github.com/PapaDanielVi/poya"
 	"github.com/PapaDanielVi/poya/provider/redis"
+	goredis "github.com/redis/go-redis/v9"
 )
 
 func main() {
-	// 1. Create a provider
-	rdb := redis.New(redis.Config{
-		Addr:         "localhost:6379",
-		PollInterval: 5 * time.Second,
-	})
+	// 1. Build and configure the backend client yourself, then hand it to a provider.
+	client := goredis.NewClient(&goredis.Options{Addr: "localhost:6379"})
+	rdb := redis.New(client, redis.Config{})
 
 	// 2. Create the SDK
 	sdk := poya.New(poya.Config{
@@ -265,6 +269,8 @@ When metrics are disabled, a no-op stub is used — no if-checks in hot paths.
 
 Each SDK instance uses its own Prometheus registry, so multiple instances won't conflict.
 
+A ready-made Grafana dashboard for these metrics lives at [`docs/grafana/poya-dashboard.json`](docs/grafana/poya-dashboard.json). Import it in Grafana (Dashboards → Import → Upload JSON) and pick your Prometheus data source. It charts watch event and error rates per key, update latency quantiles (p50/p95/p99), and the registered-key count.
+
 ### Logging
 
 poya uses a simple structured-logger interface. Inject any logger via `Config.Logger`:
@@ -287,20 +293,127 @@ type Logger interface {
 }
 ```
 
+Ready-made adapters wrap the popular logging libraries. Each `New` takes a fully-configured logger that you own:
+
+```go
+import (
+	poyazap "github.com/PapaDanielVi/poya/logger/zap"
+	poyalogrus "github.com/PapaDanielVi/poya/logger/logrus"
+	poyazerolog "github.com/PapaDanielVi/poya/logger/zerolog"
+)
+
+// zap
+zl, _ := zap.NewProduction()
+sdk := poya.New(poya.Config{Provider: rdb, Logger: poyazap.New(zl)})
+
+// logrus
+sdk := poya.New(poya.Config{Provider: rdb, Logger: poyalogrus.New(logrus.New())})
+
+// zerolog
+sdk := poya.New(poya.Config{Provider: rdb, Logger: poyazerolog.New(zerolog.New(os.Stderr))})
+```
+
+To silence poya entirely, pass `logger.NewNoop()`.
+
+### Disabling dynamic config
+
+Set `Config.Disabled` to turn poya off without removing it from your code. `Start()` becomes a no-op: the SDK never connects to a provider, never watches anything, and every registered `DcValue` keeps its default. A provider isn't required in this mode, so you can wire the flag from an environment variable or config file and ship the same binary with dynamic config on or off.
+
+```go
+sdk := poya.New(poya.Config{
+	Provider: rdb,            // ignored while disabled; may be nil
+	Disabled: os.Getenv("DYNAMIC_CONFIG") != "on",
+})
+poya.Register(sdk, "timeout", timeout)
+sdk.Start() // no-op when disabled; timeout.Get() returns its default
+```
+
+### Loading initial values from config files (Viper, koanf, ...)
+
+A common pattern is to seed `DcValue` defaults from a static config file (YAML, TOML, env) at startup, then let a provider take over for live updates. Most Go config loaders decode into structs through [mapstructure](https://github.com/go-viper/mapstructure), and poya ships decode hooks that turn decoded values into properly-typed `DcValue[T]` instances.
+
+There are two mapstructure forks in the wild, so there are two hook packages with the same API:
+
+| Package | mapstructure import | Loaders |
+| --- | --- | --- |
+| `github.com/PapaDanielVi/poya/hooks` | `github.com/mitchellh/mapstructure` (v1) | viper < 1.18, anything on the original mapstructure |
+| `github.com/PapaDanielVi/poya/hooks/mapstructurev2` | `github.com/go-viper/mapstructure/v2` | koanf v2, viper >= 1.18, OpenTelemetry Collector |
+
+Both packages handle every `DcValue` kind: scalars (parsed from strings for env/flat config), `time.Duration`, `time.Time` (RFC3339), any type whose pointer implements `encoding.TextUnmarshaler`, structs (from nested maps), and slices.
+
+**koanf v2:**
+
+```go
+import (
+	"github.com/PapaDanielVi/poya"
+	"github.com/PapaDanielVi/poya/hooks/mapstructurev2"
+	"github.com/knadh/koanf/v2"
+	"github.com/go-viper/mapstructure/v2"
+)
+
+type AppConfig struct {
+	Host    *poya.DcValue[string]        `koanf:"host" poya:"key=host"`
+	Port    *poya.DcValue[int]           `koanf:"port" poya:"key=port"`
+	Timeout *poya.DcValue[time.Duration] `koanf:"timeout" poya:"key=timeout"`
+}
+
+var cfg AppConfig
+err := k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{
+	Tag: "koanf",
+	DecoderConfig: &mapstructure.DecoderConfig{
+		DecodeHook: mapstructurev2.HookFunc(),
+		Result:     &cfg,
+	},
+})
+// cfg now holds the file values as DcValue defaults.
+poya.RegisterConfig(sdk, &cfg)
+sdk.Start() // provider values override the file defaults as they change.
+```
+
+**viper >= 1.18:**
+
+```go
+import "github.com/PapaDanielVi/poya/hooks/mapstructurev2"
+
+err := viper.Unmarshal(&cfg, viper.DecodeHook(mapstructurev2.HookFunc()))
+poya.RegisterConfig(sdk, &cfg)
+```
+
+**viper < 1.18 (or any tool on mitchellh/mapstructure):**
+
+```go
+import "github.com/PapaDanielVi/poya/hooks"
+
+decoder, _ := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+	DecodeHook: hooks.MapstructureHookFunc(),
+	Result:     &cfg,
+})
+err := decoder.Decode(viper.AllSettings())
+```
+
+Both packages also expose `StringToDcValueHookFunc()` (string sources only, for env-style config) and `JSONStringHookFunc()` (a struct or slice stored as a single JSON string), which compose with other hooks via `mapstructure.ComposeDecodeHookFunc`.
+
+Tag-based loaders that write struct fields directly without a decode hook (for example `caarlos0/env`) have no place to plug a hook in, so they aren't supported through this mechanism. Use one of the mapstructure-based loaders above to seed `DcValue` defaults.
+
 ## Provider Setup
+
+Every network provider takes a fully-configured client that you build and own. The provider never creates or hides the client, so you control endpoints, TLS, auth, pooling, and timeouts directly through each library's own config. The provider reconnects automatically with exponential backoff if the watch is dropped.
 
 ### etcd
 
-Uses etcd's native Watch API for event-driven updates (no polling):
+Uses etcd's native Watch API for event-driven updates (no polling). Pass a configured `*clientv3.Client`:
 
 ```go
-etcdProvider, err := etcd.New(etcd.Config{
+import clientv3 "go.etcd.io/etcd/client/v3"
+
+cli, err := clientv3.New(clientv3.Config{
 	Endpoints:   []string{"localhost:2379"},
 	DialTimeout: 5 * time.Second,
 })
 if err != nil {
 	log.Fatal(err)
 }
+etcdProvider := etcd.New(cli)
 defer etcdProvider.Close()
 
 sdk := poya.New(poya.Config{Provider: etcdProvider, Prefix: "myapp/"})
@@ -308,14 +421,22 @@ sdk := poya.New(poya.Config{Provider: etcdProvider, Prefix: "myapp/"})
 
 ### Redis
 
-Polls at a configurable interval. Best for simple setups without etcd:
+Watches every key under their common prefix with a single keyspace-notification
+subscription, so changes arrive as events. The provider enables keyspace
+notifications on the server itself and reads the database number from the client.
+Set `ResyncInterval` to also re-read all keys on a timer as a safety net against
+missed notifications. Pass a configured `*redis.Client`:
 
 ```go
-rdb := redis.New(redis.Config{
-	Addr:         "localhost:6379",
-	Password:     "",       // no auth
-	DB:           0,
-	PollInterval: 5 * time.Second,
+import goredis "github.com/redis/go-redis/v9"
+
+client := goredis.NewClient(&goredis.Options{
+	Addr:     "localhost:6379",
+	Password: "", // no auth
+	DB:       0,
+})
+rdb := redis.New(client, redis.Config{
+	ResyncInterval: 0, // optional; 0 means event-driven only
 })
 defer rdb.Close()
 
@@ -324,12 +445,23 @@ sdk := poya.New(poya.Config{Provider: rdb, Prefix: "myapp/"})
 
 ### HashiCorp Vault
 
-Polls the KV v2 secrets engine. The key is the secret path within the mount:
+Stores the whole config in one KV v2 secret at the keys' common prefix, one field
+per key, so a single read per poll cycle covers every key. With `Prefix: "myapp/"`
+the secret lives at `<mount>/myapp` with fields named after each key. Pass a
+configured `*vault.Client` (set the token on the client yourself):
 
 ```go
-v, err := vault.New(vault.Config{
-	Address:      "http://localhost:8200",
-	Token:        "root-token",
+import vaultapi "github.com/hashicorp/vault/api"
+
+vaultCfg := vaultapi.DefaultConfig()
+vaultCfg.Address = "http://localhost:8200"
+client, err := vaultapi.NewClient(vaultCfg)
+if err != nil {
+	log.Fatal(err)
+}
+client.SetToken("root-token")
+
+v, err := vault.New(client, vault.Config{
 	MountPath:    "secret",
 	PollInterval: 10 * time.Second,
 })
@@ -466,16 +598,25 @@ Format is auto-detected from the file extension (`.json`, `.yaml`, `.yml`) or ca
 poya/
 ├── poya.go                    # SDK: New, Start, Stop, Register, RegisterConfig
 ├── dcvalue.go                 # DcValue[T] — unified scalar + struct config value
+├── hooks/
+│   ├── hooks.go               # mapstructure v1 decode hooks (viper < 1.18)
+│   ├── internal/dchook/       # shared, mapstructure-agnostic decode logic
+│   └── mapstructurev2/        # go-viper/mapstructure/v2 hooks (koanf, viper >= 1.18)
+├── docs/grafana/              # Grafana dashboard JSON for the Prometheus metrics
 ├── metrics/
 │   ├── metrics.go             # Metrics interface + NoopMetrics stub
 │   ├── prometheus/            # Prometheus implementation
 │   └── otel/                  # OpenTelemetry implementation
 ├── logger/
-│   └── logger.go              # Logger interface + slog default + noop stub
+│   ├── logger.go              # Logger interface + slog default + noop stub
+│   ├── zap/                   # zap adapter
+│   ├── logrus/                # logrus adapter
+│   └── zerolog/               # zerolog adapter
 ├── provider/
 │   ├── provider.go            # Provider interface
+│   ├── backoff.go             # Shared exponential backoff for reconnects
 │   ├── etcd/                  # etcd provider (prefix watch API)
-│   ├── redis/                 # Redis provider (batch MGET polling)
+│   ├── redis/                 # Redis provider (keyspace notifications)
 │   ├── vault/                 # HashiCorp Vault provider (KV v2 polling)
 │   ├── mysql/                 # MySQL provider (batch polling, Repository interface)
 │   ├── postgresql/            # PostgreSQL provider (batch polling, Repository interface)
@@ -489,7 +630,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on adding providers, value
 
 ## Keywords
 
-Go, Golang, SDK, dynamic config, runtime configuration, configuration management, feature flags, A/B testing, service discovery, etcd, Redis, HashiCorp Vault, MySQL, PostgreSQL, file config, fsnotify, fsevents, type-safe config, generic config, Go SDK
+Go, Golang, SDK, dynamic config, runtime configuration, configuration management, feature flags, A/B testing, service discovery, etcd, Redis, HashiCorp Vault, MySQL, PostgreSQL, file config, fsnotify, fsevents, type-safe config, generic config, viper, koanf, mapstructure, decode hook, Go SDK
 
 ## License
 
