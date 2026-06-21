@@ -18,6 +18,7 @@
 - **Efficient watching** — every provider watches all keys with one prefix-scoped operation and one goroutine, never per key: etcd uses a single prefix watch, Redis a single keyspace subscription, SQL a single batched query per cycle. Current values load on start, so reads never sit at their defaults.
 - **Bring your own client** — each provider takes a fully-configured backend client (etcd, go-redis, Vault, `*sql.DB`), so you control every connection option: TLS, auth, pool sizing, timeouts
 - **Resilient watching** — providers reconnect after network failures with exponential backoff and re-read current values, so a dropped connection self-heals without restarting your app
+- **Delete reverts to default** — when a key is removed from the backend, the `DcValue` immediately reverts to the default it was constructed with; no stale value lingers after deletion
 - **Switchable off** — set `Config.Disabled` to skip all connections and watching; every value stays at its default, so you can ship one binary with dynamic config on or off
 - **Lock-free reads** — `Get()` uses `atomic.Value` for zero-contention reads on the hot path
 - **Pluggable metrics** — Prometheus (default), OpenTelemetry, or inject your own implementation, plus a ready-made Grafana dashboard
