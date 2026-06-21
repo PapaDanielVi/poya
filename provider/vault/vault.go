@@ -98,7 +98,7 @@ func (p *Provider) Get(ctx context.Context, key string) (string, error) {
 
 // Watch polls the single secret at the keys' common prefix and reports changed
 // fields. One Vault read per cycle covers every registered key.
-func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key string, value string), onDelete func(key string)) error {
 	if len(keys) == 0 {
 		<-ctx.Done()
 		return nil
@@ -111,20 +111,20 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 	defer ticker.Stop()
 
 	lastValues := make(map[string]string, len(keys))
-	p.poll(ctx, secretPath, prefix, keys, lastValues, onChange)
+	p.poll(ctx, secretPath, prefix, keys, lastValues, onChange, onDelete)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			p.poll(ctx, secretPath, prefix, keys, lastValues, onChange)
+			p.poll(ctx, secretPath, prefix, keys, lastValues, onChange, onDelete)
 		}
 	}
 }
 
-// poll reads the secret once and emits any key whose field value changed.
-func (p *Provider) poll(ctx context.Context, secretPath, prefix string, keys []string, lastValues map[string]string, onChange func(key string, value string)) {
+// poll reads the secret once and emits any key whose field value changed or was deleted.
+func (p *Provider) poll(ctx context.Context, secretPath, prefix string, keys []string, lastValues map[string]string, onChange func(key string, value string), onDelete func(key string)) {
 	fields, err := p.readSecret(ctx, secretPath)
 	if err != nil {
 		// Skip this cycle; the ticker retries on the next interval, so a transient
@@ -133,7 +133,14 @@ func (p *Provider) poll(ctx context.Context, secretPath, prefix string, keys []s
 	}
 	for _, key := range keys {
 		field := strings.TrimPrefix(key, prefix)
-		newVal := fields[field]
+		newVal, ok := fields[field]
+		if !ok {
+			if _, had := lastValues[key]; had {
+				delete(lastValues, key)
+				onDelete(key)
+			}
+			continue
+		}
 		if newVal != lastValues[key] {
 			lastValues[key] = newVal
 			onChange(key, newVal)

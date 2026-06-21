@@ -45,7 +45,7 @@ func (p *Provider) Get(ctx context.Context, key string) (string, error) {
 // (compaction, a broken connection, the channel closing) it re-reads the current
 // values and re-establishes the watch with exponential backoff, returning only
 // when the context is cancelled.
-func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key string, value string), onDelete func(key string)) error {
 	if len(keys) == 0 {
 		<-ctx.Done()
 		return nil
@@ -86,7 +86,7 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 		attempt = 0
 
 		watchCh := p.client.Watch(ctx, prefix, clientv3.WithPrefix(), clientv3.WithRev(resp.Header.Revision+1))
-		if p.drain(ctx, watchCh, onChange) {
+		if p.drain(ctx, watchCh, onChange, onDelete) {
 			return nil
 		}
 
@@ -102,7 +102,7 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 // drain consumes watch events until the context is cancelled (returns true) or
 // the watch channel closes or reports an error (returns false), signalling the
 // caller to re-establish the watch.
-func (p *Provider) drain(ctx context.Context, watchCh clientv3.WatchChan, onChange func(key string, value string)) bool {
+func (p *Provider) drain(ctx context.Context, watchCh clientv3.WatchChan, onChange func(key string, value string), onDelete func(key string)) bool {
 	for {
 		select {
 		case <-ctx.Done():
@@ -112,8 +112,11 @@ func (p *Provider) drain(ctx context.Context, watchCh clientv3.WatchChan, onChan
 				return false
 			}
 			for _, event := range watchResp.Events {
-				if event.Type == clientv3.EventTypePut {
+				switch event.Type {
+				case clientv3.EventTypePut:
 					onChange(string(event.Kv.Key), string(event.Kv.Value))
+				case clientv3.EventTypeDelete:
+					onDelete(string(event.Kv.Key))
 				}
 			}
 		}

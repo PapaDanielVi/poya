@@ -188,7 +188,8 @@ func (p *Provider) Get(ctx context.Context, key string) (string, error) {
 
 // Watch polls all keys at the configured interval using a single query.
 // When any value changes, onChange is called with the key and new value.
-func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+// When a key is deleted from the table, onDelete is called so the SDK reverts it to its default.
+func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key string, value string), onDelete func(key string)) error {
 	if len(keys) == 0 {
 		<-ctx.Done()
 		return nil
@@ -200,21 +201,21 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 	// lastValues starts empty so the first poll emits every current value,
 	// loading the backend state instead of leaving keys at their defaults.
 	lastValues := make(map[string]string, len(keys))
-	p.poll(ctx, keys, lastValues, onChange)
+	p.poll(ctx, keys, lastValues, onChange, onDelete)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			p.poll(ctx, keys, lastValues, onChange)
+			p.poll(ctx, keys, lastValues, onChange, onDelete)
 		}
 	}
 }
 
-// poll fetches all keys in one query and emits any whose value changed since the
-// last cycle. An empty lastValues makes it emit every current value.
-func (p *Provider) poll(ctx context.Context, keys []string, lastValues map[string]string, onChange func(key string, value string)) {
+// poll fetches all keys in one query and emits any whose value changed or was deleted since
+// the last cycle. An empty lastValues makes it emit every current value.
+func (p *Provider) poll(ctx context.Context, keys []string, lastValues map[string]string, onChange func(key string, value string), onDelete func(key string)) {
 	pollVals, err := p.repo.GetAll(ctx, keys)
 	if err != nil {
 		// Skip this cycle; the ticker retries on the next interval, so a transient
@@ -222,7 +223,14 @@ func (p *Provider) poll(ctx context.Context, keys []string, lastValues map[strin
 		return
 	}
 	for _, key := range keys {
-		newVal := pollVals[key]
+		newVal, ok := pollVals[key]
+		if !ok {
+			if _, had := lastValues[key]; had {
+				delete(lastValues, key)
+				onDelete(key)
+			}
+			continue
+		}
 		if newVal != lastValues[key] {
 			lastValues[key] = newVal
 			onChange(key, newVal)
