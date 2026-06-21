@@ -272,6 +272,16 @@ func (s *SDK) Start() {
 			updateEntry(ent, rawValue)
 			s.metrics.ObserveUpdateLatency(changedKey, time.Since(start))
 			s.log.Debug("value updated", "key", changedKey)
+		}, func(deletedKey string) {
+			s.metrics.IncWatchEvents(deletedKey)
+			s.mu.RLock()
+			ent, ok := s.values[deletedKey]
+			s.mu.RUnlock()
+			if !ok {
+				return
+			}
+			revertEntry(ent)
+			s.log.Debug("value reverted to default", "key", deletedKey)
 		})
 		if err != nil {
 			s.log.Error("watcher error", "error", err)
@@ -286,6 +296,11 @@ func (s *SDK) Stop() {
 	s.cancel()
 	s.wg.Wait()
 	s.log.Info("all watchers stopped")
+}
+
+// revertEntry restores an entry to the default its DcValue was constructed with.
+func revertEntry(e *entry) {
+	e.atomic.Store(e.defaultVal)
 }
 
 func updateEntry(e *entry, raw string) {

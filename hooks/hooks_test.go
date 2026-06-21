@@ -30,7 +30,7 @@ func (m *integMockProvider) Get(_ context.Context, key string) (string, error) {
 	return m.values[key], nil
 }
 
-func (m *integMockProvider) Watch(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+func (m *integMockProvider) Watch(ctx context.Context, keys []string, onChange func(key string, value string), _ func(string)) error {
 	m.mu.Lock()
 	for _, key := range keys {
 		val := m.values[key]
@@ -398,7 +398,7 @@ func (m *blockingMockProvider) Get(_ context.Context, key string) (string, error
 	return m.values[key], nil
 }
 
-func (m *blockingMockProvider) Watch(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+func (m *blockingMockProvider) Watch(ctx context.Context, keys []string, onChange func(key string, value string), _ func(string)) error {
 	m.mu.Lock()
 	for _, key := range keys {
 		val := m.values[key]

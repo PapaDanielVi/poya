@@ -92,7 +92,7 @@ func (p *Provider) Get(_ context.Context, key string) (string, error) {
 
 // Watch monitors the file for changes using fsnotify.
 // On each change, it re-reads the file and calls onChange for any key whose value changed.
-func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key string, value string), onDelete func(key string)) error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return fmt.Errorf("file provider: failed to create watcher: %w", err)
@@ -111,7 +111,7 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 
 	// Emit the values already loaded from the file so registered keys reflect it
 	// immediately instead of staying at their defaults until the first edit.
-	p.emitAll(keys, onChange)
+	p.emitAll(keys, onChange, onDelete)
 
 	attempt := 0
 	for {
@@ -129,7 +129,7 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) {
 				// Small delay to let the writer finish.
 				time.Sleep(50 * time.Millisecond) //nolint:mnd // delay for atomic write completion
-				p.detectChanges(keys, onChange)
+				p.detectChanges(keys, onChange, onDelete)
 				// A healthy event means the watch recovered; reset the backoff.
 				attempt = 0
 			}
@@ -151,21 +151,26 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 	}
 }
 
-// detectChanges reloads the file and calls onChange for every key.
-func (p *Provider) detectChanges(keys []string, onChange func(key string, value string)) {
+// detectChanges reloads the file and calls onChange or onDelete for every key.
+func (p *Provider) detectChanges(keys []string, onChange func(key string, value string), onDelete func(key string)) {
 	if err := p.load(); err != nil {
 		return
 	}
-	p.emitAll(keys, onChange)
+	p.emitAll(keys, onChange, onDelete)
 }
 
-// emitAll calls onChange with the currently loaded value of every key.
-func (p *Provider) emitAll(keys []string, onChange func(key string, value string)) {
+// emitAll calls onChange with the current value of each key. If a key is absent
+// from the loaded file, onDelete is called so the SDK reverts it to its default.
+func (p *Provider) emitAll(keys []string, onChange func(key string, value string), onDelete func(key string)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	for _, key := range keys {
-		onChange(key, p.values[key])
+		if v, ok := p.values[key]; ok {
+			onChange(key, v)
+		} else {
+			onDelete(key)
+		}
 	}
 }
 

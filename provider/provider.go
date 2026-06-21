@@ -18,9 +18,11 @@ type Provider interface {
 	// Watch monitors multiple keys for changes. The provider is free to
 	// implement this as a single prefix watch, a batch poll, or any other
 	// efficient strategy. When a change is detected for a key, onChange is
-	// called with the key and the new raw string value.
+	// called with the key and the new raw string value. When a key is removed
+	// from the backend, onDelete is called with the key so the SDK can revert
+	// it to the DcValue default.
 	// The implementation must block until the context is cancelled or an error occurs.
-	Watch(ctx context.Context, keys []string, onChange func(key string, value string)) error
+	Watch(ctx context.Context, keys []string, onChange func(key string, value string), onDelete func(key string)) error
 
 	// Close releases any resources held by the provider.
 	Close() error

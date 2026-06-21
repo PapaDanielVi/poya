@@ -16,7 +16,7 @@ import (
 type mockProvider struct {
 	mu      sync.Mutex
 	values  map[string]string
-	watchFn func(ctx context.Context, keys []string, onChange func(key string, value string)) error
+	watchFn func(ctx context.Context, keys []string, onChange func(key string, value string), onDelete func(key string)) error
 }
 
 func newMockProvider() *mockProvider {
@@ -31,9 +31,9 @@ func (m *mockProvider) Get(_ context.Context, key string) (string, error) {
 	return m.values[key], nil
 }
 
-func (m *mockProvider) Watch(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+func (m *mockProvider) Watch(ctx context.Context, keys []string, onChange func(key string, value string), onDelete func(key string)) error {
 	if m.watchFn != nil {
-		return m.watchFn(ctx, keys, onChange)
+		return m.watchFn(ctx, keys, onChange, onDelete)
 	}
 	m.mu.Lock()
 	for _, key := range keys {
@@ -272,7 +272,7 @@ func TestStartUpdatesScalarValue(t *testing.T) {
 	p.set("test/key", "initial")
 
 	updateCh := make(chan struct{}, 1)
-	p.watchFn = func(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+	p.watchFn = func(ctx context.Context, keys []string, onChange func(key string, value string), _ func(string)) error {
 		for _, key := range keys {
 			if key == "test/key" {
 				onChange(key, "initial")
@@ -318,7 +318,7 @@ func TestStartUpdatesStructValue(t *testing.T) {
 	p := newMockProvider()
 
 	updateCh := make(chan struct{}, 1)
-	p.watchFn = func(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+	p.watchFn = func(ctx context.Context, keys []string, onChange func(key string, value string), _ func(string)) error {
 		for _, key := range keys {
 			if key == "test/db" {
 				onChange(key, `{"host":"localhost","port":5432}`)
@@ -360,7 +360,7 @@ func TestStartUpdatesArrayValue(t *testing.T) {
 	p := newMockProvider()
 
 	updateCh := make(chan struct{}, 1)
-	p.watchFn = func(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+	p.watchFn = func(ctx context.Context, keys []string, onChange func(key string, value string), _ func(string)) error {
 		for _, key := range keys {
 			if key == "test/ports" {
 				onChange(key, `[8080, 9090]`)
@@ -403,7 +403,7 @@ func TestStartUpdatesArrayStringValue(t *testing.T) {
 	p := newMockProvider()
 
 	updateCh := make(chan struct{}, 1)
-	p.watchFn = func(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+	p.watchFn = func(ctx context.Context, keys []string, onChange func(key string, value string), _ func(string)) error {
 		for _, key := range keys {
 			if key == "test/tags" {
 				onChange(key, `["alpha","beta"]`)
@@ -472,7 +472,7 @@ func TestCustomMetricsReceiveEvents(t *testing.T) {
 	fm := &fakeMetrics{}
 
 	updateCh := make(chan struct{}, 1)
-	p.watchFn = func(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+	p.watchFn = func(ctx context.Context, keys []string, onChange func(key string, value string), _ func(string)) error {
 		for _, key := range keys {
 			if key == "test/db" {
 				onChange(key, `{"host":"localhost","port":5432}`)
@@ -642,7 +642,7 @@ func TestSDKStopCancelsWatchers(t *testing.T) {
 	p := newMockProvider()
 	watchStopped := make(chan struct{}, 1)
 
-	p.watchFn = func(ctx context.Context, _ []string, _ func(_ string, _ string)) error {
+	p.watchFn = func(ctx context.Context, _ []string, _ func(_ string, _ string), _ func(string)) error {
 		<-ctx.Done()
 		watchStopped <- struct{}{}
 		return nil
@@ -700,3 +700,107 @@ func (f *fakeMetrics) SetRegisteredKeys(_ int) {}
 
 var _ metrics.Metrics = (*fakeMetrics)(nil)
 var _ provider.Provider = (*mockProvider)(nil)
+
+func TestRevertToDefaultOnDelete(t *testing.T) {
+	t.Parallel()
+
+	type serverConfig struct {
+		Host string `json:"host"`
+		Port int    `json:"port"`
+	}
+
+	tests := []struct {
+		name         string
+		register     func(sdk *SDK) (getVal func() any)
+		initialValue string
+		wantDefault  any
+	}{
+		{
+			name: "scalar",
+			register: func(sdk *SDK) func() any {
+				val := NewDcValue("default-host")
+				Register(sdk, "key", val)
+				return func() any { return val.Get() }
+			},
+			initialValue: "override-host",
+			wantDefault:  "default-host",
+		},
+		{
+			name: "struct",
+			register: func(sdk *SDK) func() any {
+				val := NewDcValue(serverConfig{Host: "localhost", Port: 8080})
+				Register(sdk, "key", val)
+				return func() any { return val.Get() }
+			},
+			initialValue: `{"host":"remote","port":9090}`,
+			wantDefault:  serverConfig{Host: "localhost", Port: 8080},
+		},
+		{
+			name: "array",
+			register: func(sdk *SDK) func() any {
+				val := NewDcValue([]string{"a", "b"})
+				Register(sdk, "key", val)
+				return func() any { return val.Get() }
+			},
+			initialValue: `["x","y","z"]`,
+			wantDefault:  []string{"a", "b"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			updateCh := make(chan struct{}, 1)
+			deleteCh := make(chan struct{}, 1)
+
+			p := newMockProvider()
+			p.watchFn = func(ctx context.Context, keys []string, onChange func(key string, value string), onDelete func(key string)) error {
+				for _, key := range keys {
+					onChange(key, tt.initialValue)
+				}
+				go func() {
+					time.Sleep(50 * time.Millisecond)
+					updateCh <- struct{}{}
+					time.Sleep(50 * time.Millisecond)
+					for _, key := range keys {
+						onDelete(key)
+					}
+					deleteCh <- struct{}{}
+				}()
+				<-ctx.Done()
+				return nil
+			}
+
+			sdk := New(Config{Provider: p})
+			getVal := tt.register(sdk)
+			sdk.Start()
+
+			select {
+			case <-updateCh:
+			case <-time.After(2 * time.Second):
+				t.Fatal("timed out waiting for update signal")
+			}
+
+			time.Sleep(10 * time.Millisecond)
+
+			if reflect.DeepEqual(getVal(), tt.wantDefault) {
+				t.Errorf("expected value to differ from default after onChange, got default %v", tt.wantDefault)
+			}
+
+			select {
+			case <-deleteCh:
+			case <-time.After(2 * time.Second):
+				t.Fatal("timed out waiting for delete signal")
+			}
+
+			time.Sleep(10 * time.Millisecond)
+
+			if got := getVal(); !reflect.DeepEqual(got, tt.wantDefault) {
+				t.Errorf("after delete: Get() = %v, want default %v", got, tt.wantDefault)
+			}
+
+			sdk.Stop()
+		})
+	}
+}

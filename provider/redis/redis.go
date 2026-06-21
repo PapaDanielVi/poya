@@ -59,12 +59,13 @@ func (p *Provider) Get(ctx context.Context, key string) (string, error) {
 
 // Watch subscribes to keyspace notifications for the common prefix of all keys
 // using a single pattern subscription. When Redis publishes a change for a watched
-// key, onChange is called with the key and its new value. One subscription and one
+// key, onChange is called with the key and its new value. When a key disappears
+// (DEL, TTL expiry, or eviction), onDelete is called. One subscription and one
 // goroutine cover every key, regardless of how many are registered. If the
 // subscription drops (a broken connection, the channel closing) it re-subscribes
 // with exponential backoff and re-reads all keys, returning only when the context
 // is cancelled.
-func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key string, value string)) error {
+func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key string, value string), onDelete func(key string)) error {
 	if len(keys) == 0 {
 		<-ctx.Done()
 		return nil
@@ -86,7 +87,7 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 		if ctx.Err() != nil {
 			return nil
 		}
-		if p.subscribeOnce(ctx, keys, watched, channelPrefix, pattern, lastValues, onChange) {
+		if p.subscribeOnce(ctx, keys, watched, channelPrefix, pattern, lastValues, onChange, onDelete) {
 			return nil
 		}
 		if !provider.SleepBackoff(ctx, attempt) {
@@ -96,10 +97,24 @@ func (p *Provider) Watch(ctx context.Context, keys []string, onChange func(key s
 	}
 }
 
+// getExists retrieves the value for a key and reports whether it exists in Redis.
+// A missing key returns ("", false). A transient error returns ("", true) so the
+// SDK does not spuriously revert to the default on a network hiccup.
+func (p *Provider) getExists(ctx context.Context, key string) (string, bool) {
+	val, err := p.client.Get(ctx, key).Result()
+	if err == goredis.Nil {
+		return "", false
+	}
+	if err != nil {
+		return "", true
+	}
+	return val, true
+}
+
 // subscribeOnce enables keyspace notifications, subscribes, and consumes events
 // until the context is cancelled (returns true) or the subscription drops
 // (returns false), signalling the caller to re-subscribe.
-func (p *Provider) subscribeOnce(ctx context.Context, keys []string, watched map[string]struct{}, channelPrefix, pattern string, lastValues map[string]string, onChange func(key string, value string)) bool {
+func (p *Provider) subscribeOnce(ctx context.Context, keys []string, watched map[string]struct{}, channelPrefix, pattern string, lastValues map[string]string, onChange func(key string, value string), onDelete func(key string)) bool {
 	// Keyspace notifications are off by default; enable key events for all commands.
 	if err := p.client.ConfigSet(ctx, "notify-keyspace-events", "KEA").Err(); err != nil {
 		return false
@@ -110,7 +125,7 @@ func (p *Provider) subscribeOnce(ctx context.Context, keys []string, watched map
 
 	// Re-read all keys on every (re)connect to load current state and catch any
 	// change missed while disconnected.
-	p.resyncAll(ctx, keys, lastValues, onChange)
+	p.resyncAll(ctx, keys, lastValues, onChange, onDelete)
 
 	var resync <-chan time.Time
 	if p.resyncInterval > 0 {
@@ -132,25 +147,39 @@ func (p *Provider) subscribeOnce(ctx context.Context, keys []string, watched map
 			if _, watching := watched[key]; !watching {
 				continue
 			}
-			val, _ := p.Get(ctx, key)
+			val, exists := p.getExists(ctx, key)
+			if !exists {
+				if _, had := lastValues[key]; had {
+					delete(lastValues, key)
+					onDelete(key)
+				}
+				continue
+			}
 			if val != lastValues[key] {
 				lastValues[key] = val
 				onChange(key, val)
 			}
 		case <-resync:
-			p.resyncAll(ctx, keys, lastValues, onChange)
+			p.resyncAll(ctx, keys, lastValues, onChange, onDelete)
 		}
 	}
 }
 
-// resyncAll re-reads every key via a single MGET and emits any that changed.
-func (p *Provider) resyncAll(ctx context.Context, keys []string, lastValues map[string]string, onChange func(key string, value string)) {
+// resyncAll re-reads every key via a single MGET and emits any that changed or were deleted.
+func (p *Provider) resyncAll(ctx context.Context, keys []string, lastValues map[string]string, onChange func(key string, value string), onDelete func(key string)) {
 	vals, err := p.client.MGet(ctx, keys...).Result()
 	if err != nil {
 		return
 	}
 	for i, v := range vals {
 		key := keys[i]
+		if v == nil {
+			if _, had := lastValues[key]; had {
+				delete(lastValues, key)
+				onDelete(key)
+			}
+			continue
+		}
 		newVal, _ := v.(string)
 		if newVal != lastValues[key] {
 			lastValues[key] = newVal
