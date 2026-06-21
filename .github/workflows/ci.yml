@@ -9,6 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'pull_request' && 'ci-approval' || '' }}
     strategy:
       matrix:
         go-version: ["1.26"]
@@ -37,6 +38,7 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'pull_request' && 'ci-approval' || '' }}
     steps:
       - uses: actions/checkout@v6
 
