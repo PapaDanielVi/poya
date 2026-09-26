@@ -256,9 +256,7 @@ func (s *SDK) Start() {
 		keys = append(keys, k)
 	}
 
-	s.wg.Add(1)
-	go func() { //nolint:modernize // waitgroupgo: standard pattern is acceptable
-		defer s.wg.Done()
+	s.wg.Go(func() {
 		s.log.Debug("watcher started", "keys", len(keys))
 		err := s.provider.Watch(s.ctx, keys, func(changedKey string, rawValue string) {
 			start := time.Now()
@@ -288,7 +286,7 @@ func (s *SDK) Start() {
 			s.metrics.IncWatchErrors("provider")
 		}
 		s.log.Debug("watcher stopped")
-	}()
+	})
 }
 
 func (s *SDK) Stop() {
