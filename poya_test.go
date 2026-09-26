@@ -114,9 +114,9 @@ func TestRegisterAndGet(t *testing.T) {
 func TestRegisterConfigScalar(t *testing.T) {
 	t.Parallel()
 	type AppConfig struct {
-		DBHost  DcValue[string] `poya:"key=db_host"`
-		DBPort  DcValue[int]    `poya:"key=db_port"`
-		Verbose DcValue[bool]   `poya:"key=verbose"`
+		DBHost  DcValue[string] `poya:"key:db_host"`
+		DBPort  DcValue[int]    `poya:"key:db_port"`
+		Verbose DcValue[bool]   `poya:"key:verbose"`
 	}
 
 	p := newMockProvider()
@@ -147,11 +147,11 @@ func TestRegisterConfigScalar(t *testing.T) {
 func TestRegisterConfigNested(t *testing.T) {
 	t.Parallel()
 	type DBConfig struct {
-		Host DcValue[string] `poya:"key=host"`
-		Port DcValue[int]    `poya:"key=port"`
+		Host DcValue[string] `poya:"key:host"`
+		Port DcValue[int]    `poya:"key:port"`
 	}
 	type AppConfig struct {
-		DB DBConfig `poya:"prefix=db"`
+		DB DBConfig `poya:"prefix:db"`
 	}
 
 	p := newMockProvider()
@@ -232,8 +232,8 @@ func TestRegisterConfigMixed(t *testing.T) {
 		Port int    `json:"port"`
 	}
 	type AppConfig struct {
-		Timeout DcValue[time.Duration] `poya:"key=timeout"`
-		DB      DcValue[DBDetails]     `poya:"key=db_config"`
+		Timeout DcValue[time.Duration] `poya:"key:timeout"`
+		DB      DcValue[DBDetails]     `poya:"key:db_config"`
 	}
 
 	p := newMockProvider()
@@ -264,6 +264,188 @@ func TestRegisterConfigMixed(t *testing.T) {
 	if dbEntry.kind != EntryKindStruct {
 		t.Error("expected EntryKindStruct for DcValue[DBDetails]")
 	}
+}
+
+func TestRegisterConfigMap(t *testing.T) {
+	t.Parallel()
+	p := newMockProvider()
+	sdk := New(Config{Provider: p, Prefix: "myapp/"})
+
+	hostVal := NewDcValue("localhost")
+	portVal := NewDcValue(8080)
+	cfg := map[string]any{
+		"host": hostVal,
+		"port": portVal,
+	}
+
+	RegisterConfig(sdk, cfg)
+
+	sdk.mu.RLock()
+	defer sdk.mu.RUnlock()
+
+	if _, ok := sdk.values["myapp/host"]; !ok {
+		t.Error("host not registered from map")
+	}
+	if _, ok := sdk.values["myapp/port"]; !ok {
+		t.Error("port not registered from map")
+	}
+}
+
+func TestRegisterConfigNestedMap(t *testing.T) {
+	t.Parallel()
+	p := newMockProvider()
+	sdk := New(Config{Provider: p, Prefix: "myapp/"})
+
+	hostVal := NewDcValue("localhost")
+	portVal := NewDcValue(5432)
+	cfg := map[string]any{
+		"db": map[string]any{
+			"host": hostVal,
+			"port": portVal,
+		},
+	}
+
+	RegisterConfig(sdk, &cfg)
+
+	sdk.mu.RLock()
+	defer sdk.mu.RUnlock()
+
+	if _, ok := sdk.values["myapp/db/host"]; !ok {
+		t.Error("db/host not registered from nested map")
+	}
+	if _, ok := sdk.values["myapp/db/port"]; !ok {
+		t.Error("db/port not registered from nested map")
+	}
+}
+
+func TestRegisterConfigStructWithMap(t *testing.T) {
+	t.Parallel()
+	p := newMockProvider()
+	sdk := New(Config{Provider: p, Prefix: "myapp/"})
+
+	type AppConfig struct {
+		Settings map[string]any `poya:"prefix:settings"`
+	}
+
+	timeoutVal := NewDcValue("10s")
+	cfg := AppConfig{
+		Settings: map[string]any{
+			"timeout": timeoutVal,
+		},
+	}
+
+	RegisterConfig(sdk, &cfg)
+
+	sdk.mu.RLock()
+	defer sdk.mu.RUnlock()
+
+	if _, ok := sdk.values["myapp/settings/timeout"]; !ok {
+		t.Error("settings/timeout not registered from struct with map")
+	}
+}
+
+func TestRegisterConfigMapWithStruct(t *testing.T) {
+	t.Parallel()
+	p := newMockProvider()
+	sdk := New(Config{Provider: p, Prefix: "myapp/"})
+
+	type DBConfig struct {
+		Host DcValue[string] `poya:"key:host"`
+		Port DcValue[int]    `poya:"key:port"`
+	}
+
+	cfg := map[string]any{
+		"db": &DBConfig{
+			Host: *NewDcValue("127.0.0.1"),
+			Port: *NewDcValue(3306),
+		},
+	}
+
+	RegisterConfig(sdk, cfg)
+
+	sdk.mu.RLock()
+	defer sdk.mu.RUnlock()
+
+	if _, ok := sdk.values["myapp/db/host"]; !ok {
+		t.Error("db/host not registered from map containing struct")
+	}
+	if _, ok := sdk.values["myapp/db/port"]; !ok {
+		t.Error("db/port not registered from map containing struct")
+	}
+}
+
+func TestRegisterConfigMapIgnoredTypes(t *testing.T) {
+	t.Parallel()
+	p := newMockProvider()
+	sdk := New(Config{Provider: p, Prefix: "myapp/"})
+
+	cfg := map[string]any{
+		"nil_val":    nil,
+		"int_val":    123,
+		"string_val": "ignored",
+	}
+
+	RegisterConfig(sdk, cfg)
+
+	sdk.mu.RLock()
+	defer sdk.mu.RUnlock()
+
+	if len(sdk.values) != 0 {
+		t.Errorf("expected 0 values registered for non-dcvalue entries, got %d", len(sdk.values))
+	}
+
+	// Also non-string-any map should be ignored
+	nonTargetMap := map[string]string{
+		"key": "val",
+	}
+	registerConfig(sdk, reflect.ValueOf(nonTargetMap), "")
+	if len(sdk.values) != 0 {
+		t.Errorf("expected 0 values registered for map[string]string, got %d", len(sdk.values))
+	}
+}
+
+func TestRegisterConfigMapLiveUpdate(t *testing.T) {
+	t.Parallel()
+	p := newMockProvider()
+	p.set("myapp/service/port", "8080")
+
+	updateCh := make(chan struct{}, 1)
+	p.watchFn = func(ctx context.Context, keys []string, onChange func(key string, value string), _ func(string)) error {
+		for _, key := range keys {
+			if key == "myapp/service/port" {
+				go func() {
+					time.Sleep(50 * time.Millisecond)
+					onChange(key, "9090")
+					updateCh <- struct{}{}
+				}()
+			}
+		}
+		<-ctx.Done()
+		return nil
+	}
+
+	sdk := New(Config{Provider: p, Prefix: "myapp/"})
+	portVal := NewDcValue(8080)
+	cfg := map[string]any{
+		"service": map[string]any{
+			"port": portVal,
+		},
+	}
+	RegisterConfig(sdk, cfg)
+	sdk.Start()
+
+	select {
+	case <-updateCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for update signal")
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	if got := portVal.Get(); got != 9090 {
+		t.Errorf("expected updated port 9090, got %d", got)
+	}
+
+	sdk.Stop()
 }
 
 func TestStartUpdatesScalarValue(t *testing.T) {
@@ -606,10 +788,12 @@ func TestParsePoyaTag(t *testing.T) {
 		want poyaTag
 	}{
 		{"", poyaTag{}},
-		{"key=db_host", poyaTag{key: "db_host"}},
-		{"prefix=db", poyaTag{prefix: "db"}},
-		{"key=db_host,prefix=db", poyaTag{key: "db_host", prefix: "db"}},
-		{"prefix=db,key=db_host", poyaTag{key: "db_host", prefix: "db"}},
+		{"key:db_host", poyaTag{key: "db_host"}},
+		{"prefix:db", poyaTag{prefix: "db"}},
+		{"key:db_host,prefix:db", poyaTag{key: "db_host", prefix: "db"}},
+		{"prefix:db,key:db_host", poyaTag{key: "db_host", prefix: "db"}},
+		{"db_host", poyaTag{key: "db_host"}},
+		{"db_host,prefix:db", poyaTag{key: "db_host", prefix: "db"}},
 	}
 
 	for _, tt := range tests {
@@ -618,6 +802,34 @@ func TestParsePoyaTag(t *testing.T) {
 			t.Errorf("parsePoyaTag(%q) = {key:%q prefix:%q}, want {key:%q prefix:%q}",
 				tt.raw, got.key, got.prefix, tt.want.key, tt.want.prefix)
 		}
+	}
+}
+
+func TestRegisterConfigBareJsonLikeTag(t *testing.T) {
+	t.Parallel()
+	type AppConfig struct {
+		Host DcValue[string] `poya:"custom_host"`
+		Port DcValue[int]    `poya:"custom_port"`
+	}
+
+	p := newMockProvider()
+	sdk := New(Config{Provider: p, Prefix: "myapp/"})
+
+	cfg := AppConfig{
+		Host: *NewDcValue("localhost"),
+		Port: *NewDcValue(8080),
+	}
+
+	RegisterConfig(sdk, &cfg)
+
+	sdk.mu.RLock()
+	defer sdk.mu.RUnlock()
+
+	if _, ok := sdk.values["myapp/custom_host"]; !ok {
+		t.Error("custom_host not registered from bare json-like tag")
+	}
+	if _, ok := sdk.values["myapp/custom_port"]; !ok {
+		t.Error("custom_port not registered from bare json-like tag")
 	}
 }
 

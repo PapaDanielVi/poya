@@ -116,7 +116,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - **Split the Metrics interface from its implementations**. The interface lives in `metrics/metrics.go` (package `metrics`), while implementations live in `metrics/prometheus/`, `metrics/otel/`. This keeps the interface importable without pulling in backend dependencies.
 
 ### Struct Tag Parsing
-- **The `poyaTag` struct uses `key` and `prefix` fields** parsed from comma-separated tag values (`poya:"key=host,prefix=db"`). Fields without any tag default to their lowercased field name.
+- **The `poyaTag` struct uses `key` and `prefix` fields** parsed from comma-separated tag values (`poya:"key:host,prefix:db"` or `poya:"host"`). Fields without any tag default to their lowercased field name.
 
 ### Concurrent Agent Pitfalls
 - **Multiple agents editing the same file will conflict and overwrite each other's changes**. When coordinating many parallel tasks, agents must not touch the same files. If they do, the last writer wins and earlier changes are lost. Plan agent scopes carefully to avoid overlap.

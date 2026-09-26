@@ -171,15 +171,15 @@ Define your entire configuration in a single struct. poya uses struct tags to di
 
 ```go
 type AppConfig struct {
-	Timeout  poya.DcValue[string]        `poya:"key=timeout"`
-	Verbose  poya.DcValue[bool]          `poya:"key=verbose"`
-	DBConfig poya.DcValue[DatabaseConfig] `poya:"key=db_config"`
-	DB       DBConfig                     `poya:"prefix=db"`
+	Timeout  poya.DcValue[string]        `poya:"key:timeout"`
+	Verbose  poya.DcValue[bool]          `poya:"key:verbose"`
+	DBConfig poya.DcValue[DatabaseConfig] `poya:"key:db_config"`
+	DB       DBConfig                     `poya:"prefix:db"`
 }
 
 type DBConfig struct {
-	Host poya.DcValue[string] `poya:"key=host"`
-	Port poya.DcValue[int]    `poya:"key=port"`
+	Host poya.DcValue[string] `poya:"key:host"`
+	Port poya.DcValue[int]    `poya:"key:port"`
 }
 
 cfg := AppConfig{
@@ -200,9 +200,9 @@ sdk.RegisterConfig(&cfg)
 
 | Tag                         | Meaning                                                 |
 | --------------------------- | ------------------------------------------------------- |
-| `poya:"key=timeout"`        | This field is a config value watched at key `timeout`   |
-| `poya:"prefix=db"`          | This nested struct contributes `db/` to child key paths |
-| `poya:"key=host,prefix=db"` | Both a value and a prefix for deeper nesting            |
+| `poya:"key:timeout"`        | This field is a config value watched at key `timeout`   |
+| `poya:"prefix:db"`          | This nested struct contributes `db/` to child key paths |
+| `poya:"key:host,prefix:db"` | Both a value and a prefix for deeper nesting            |
 
 Fields without a tag use their lowercased field name as the key.
 
@@ -214,8 +214,8 @@ Prefixes accumulate hierarchically:
 Full key = SDK Prefix + Parent Prefixes + Field Key
 
 Example with Prefix="myapp/":
-  Timeout field (key=timeout) → "myapp/timeout"
-  DB.Host field (key=host, parent prefix="db/") → "myapp/db/host"
+  Timeout field (key:timeout) → "myapp/timeout"
+  DB.Host field (key:host, parent prefix="db/") → "myapp/db/host"
 ```
 
 ### Metrics
@@ -353,9 +353,9 @@ import (
 )
 
 type AppConfig struct {
-	Host    *poya.DcValue[string]        `koanf:"host" poya:"key=host"`
-	Port    *poya.DcValue[int]           `koanf:"port" poya:"key=port"`
-	Timeout *poya.DcValue[time.Duration] `koanf:"timeout" poya:"key=timeout"`
+	Host    *poya.DcValue[string]        `koanf:"host" poya:"key:host"`
+	Port    *poya.DcValue[int]           `koanf:"port" poya:"key:port"`
+	Timeout *poya.DcValue[time.Duration] `koanf:"timeout" poya:"key:timeout"`
 }
 
 var cfg AppConfig

@@ -34,12 +34,16 @@ func parsePoyaTag(raw string) poyaTag {
 	var pt poyaTag
 	for part := range strings.SplitSeq(raw, ",") {
 		part = strings.TrimSpace(part)
-		if after, found := strings.CutPrefix(part, "key="); found {
+		if after, found := strings.CutPrefix(part, "key:"); found {
 			pt.key = after
 			continue
 		}
-		if after, found := strings.CutPrefix(part, "prefix="); found {
+		if after, found := strings.CutPrefix(part, "prefix:"); found {
 			pt.prefix = after
+			continue
+		}
+		if part != "" && pt.key == "" {
+			pt.key = part
 		}
 	}
 	return pt
@@ -136,18 +140,58 @@ func Register[T any](s *SDK, key string, val *DcValue[T]) {
 
 func RegisterConfig(s *SDK, structVal any) {
 	v := reflect.ValueOf(structVal)
-	if v.Kind() != reflect.Pointer {
+	if v.Kind() == reflect.Pointer {
+		v = v.Elem()
+	} else if v.Kind() != reflect.Map {
 		panic("RegisterConfig requires a pointer to a struct")
 	}
-	registerConfig(s, v.Elem(), "")
+	registerConfig(s, v, "")
 }
 
 func registerConfig(s *SDK, v reflect.Value, parentPrefix string) {
+	if !v.IsValid() {
+		return
+	}
+	if v.Kind() == reflect.Interface {
+		v = v.Elem()
+		if !v.IsValid() {
+			return
+		}
+	}
+	if isDcValue(v) {
+		fullKey := s.prefix + parentPrefix
+		handleDcValue(s, v, fullKey)
+		return
+	}
 	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
+		if !v.IsValid() {
+			return
+		}
 	}
-	if v.Kind() != reflect.Struct {
+
+	switch v.Kind() {
+	case reflect.Struct:
+		registerConfigStruct(s, v, parentPrefix)
+	case reflect.Map:
+		registerConfigMap(s, v, parentPrefix)
+	}
+}
+
+func registerConfigMap(s *SDK, v reflect.Value, parentPrefix string) {
+	if v.IsNil() || v.Type().Key().Kind() != reflect.String || v.Type().Elem() != reflect.TypeFor[any]() {
 		return
+	}
+
+	for _, k := range v.MapKeys() {
+		childPrefix := mapChildPrefix(parentPrefix, k.String())
+		registerConfig(s, v.MapIndex(k), childPrefix)
+	}
+}
+
+func registerConfigStruct(s *SDK, v reflect.Value, parentPrefix string) {
+	if parentPrefix != "" && !strings.HasSuffix(parentPrefix, "/") {
+		parentPrefix += "/"
 	}
 
 	t := v.Type()
@@ -171,11 +215,29 @@ func registerConfig(s *SDK, v reflect.Value, parentPrefix string) {
 			continue
 		}
 
-		if fv.Kind() == reflect.Struct || (fv.Kind() == reflect.Pointer && fv.Elem().Kind() == reflect.Struct) {
+		if isNestedContainer(fv) {
 			nestedPrefix := calcNestedPrefix(parentPrefix, tag)
 			registerConfig(s, fv, nestedPrefix)
 		}
 	}
+}
+
+func isNestedContainer(v reflect.Value) bool {
+	if v.Kind() == reflect.Pointer {
+		v = v.Elem()
+	}
+	return v.IsValid() && (v.Kind() == reflect.Struct || v.Kind() == reflect.Map)
+}
+
+func mapChildPrefix(parent string, key string) string {
+	key = strings.TrimPrefix(key, "/")
+	if parent == "" {
+		return key
+	}
+	if strings.HasSuffix(parent, "/") {
+		return parent + key
+	}
+	return parent + "/" + key
 }
 
 func calcNestedPrefix(parent string, tag poyaTag) string {
@@ -190,14 +252,25 @@ func calcNestedPrefix(parent string, tag poyaTag) string {
 }
 
 func isDcValue(v reflect.Value) bool {
-	if !v.CanAddr() {
+	if !v.IsValid() {
 		return false
 	}
-	// For *DcValue[T] pointer fields, methods are on the pointer itself.
-	// For embedded DcValue[T] value fields, methods are on the address.
-	rcv := reflect.ValueOf(v.Addr().Interface())
+	if v.Kind() == reflect.Interface {
+		v = v.Elem()
+		if !v.IsValid() {
+			return false
+		}
+	}
+	var rcv reflect.Value
 	if v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return false
+		}
 		rcv = v
+	} else if v.CanAddr() {
+		rcv = reflect.ValueOf(v.Addr().Interface())
+	} else {
+		return false
 	}
 	return rcv.MethodByName("Get").IsValid() &&
 		rcv.MethodByName("InternalKey").IsValid() &&
@@ -205,6 +278,9 @@ func isDcValue(v reflect.Value) bool {
 }
 
 func handleDcValue(s *SDK, fv reflect.Value, fullKey string) {
+	if fv.Kind() == reflect.Interface {
+		fv = fv.Elem()
+	}
 	// For *DcValue[T] pointer fields, use the pointer directly.
 	// For embedded DcValue[T] value fields, use the address.
 	rcv := fv

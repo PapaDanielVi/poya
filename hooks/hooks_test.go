@@ -318,9 +318,9 @@ func TestMapstructureHookFunc_ReturnType(t *testing.T) {
 func TestHookThenRegisterConfig_EndToEnd(t *testing.T) {
 	t.Parallel()
 	type AppConfig struct {
-		Host    *poya.DcValue[string] `mapstructure:"host" poya:"key=db_host"`
-		Port    *poya.DcValue[int]    `mapstructure:"port" poya:"key=db_port"`
-		Verbose *poya.DcValue[bool]   `mapstructure:"verbose" poya:"key=verbose"`
+		Host    *poya.DcValue[string] `mapstructure:"host" poya:"key:db_host"`
+		Port    *poya.DcValue[int]    `mapstructure:"port" poya:"key:db_port"`
+		Verbose *poya.DcValue[bool]   `mapstructure:"verbose" poya:"key:verbose"`
 	}
 
 	// Step 1: Decode YAML-like map into struct using the hook.
@@ -566,7 +566,7 @@ func TestHookThenRegisterConfig_StructT(t *testing.T) {
 		Port int    `json:"port"`
 	}
 	type AppConfig struct {
-		DB *poya.DcValue[DBConfig] `mapstructure:"db" poya:"key=db_config"`
+		DB *poya.DcValue[DBConfig] `mapstructure:"db" poya:"key:db_config"`
 	}
 
 	var cfg AppConfig

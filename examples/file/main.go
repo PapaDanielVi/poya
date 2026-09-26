@@ -52,12 +52,12 @@ type DatabaseConfig struct {
 
 // CheckoutConfig is the full runtime config, registered in one shot via RegisterConfig.
 type CheckoutConfig struct {
-	LogLevel        poya.DcValue[string]         `poya:"key=log_level"`
-	RequestTimeout  poya.DcValue[time.Duration]  `poya:"key=request_timeout"`
-	RateLimitRPS    poya.DcValue[int]            `poya:"key=rate_limit_rps"`
-	MaintenanceMode poya.DcValue[bool]           `poya:"key=maintenance_mode"`
-	Database        poya.DcValue[DatabaseConfig] `poya:"key=database"`
-	AllowedOrigins  poya.DcValue[[]string]       `poya:"key=allowed_origins"`
+	LogLevel        poya.DcValue[string]         `poya:"key:log_level"`
+	RequestTimeout  poya.DcValue[time.Duration]  `poya:"key:request_timeout"`
+	RateLimitRPS    poya.DcValue[int]            `poya:"key:rate_limit_rps"`
+	MaintenanceMode poya.DcValue[bool]           `poya:"key:maintenance_mode"`
+	Database        poya.DcValue[DatabaseConfig] `poya:"key:database"`
+	AllowedOrigins  poya.DcValue[[]string]       `poya:"key:allowed_origins"`
 }
 
 func newConfig() *CheckoutConfig {
